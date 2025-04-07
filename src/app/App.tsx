@@ -54,7 +54,7 @@ const getFriendlyLanguageName = (code: string): string => {
 function App() {
   const searchParams = useSearchParams();
 
-  const { transcriptItems, addTranscriptMessage, addTranscriptBreadcrumb, updateTranscriptItemStatus } =
+  const { transcriptItems, addTranscriptMessage, addTranscriptBreadcrumb, updateTranscriptItemStatus, updateTranscriptMessage, toggleTranscriptItemExpand } =
     useTranscript();
   const { logClientEvent, logServerEvent } = useEvent();
 
@@ -96,6 +96,41 @@ function App() {
   const [realtimeTranslation, setRealtimeTranslation] = useState<string>("");
   const [realtimeFromLang, setRealtimeFromLang] = useState<string>("");
   const [realtimeToLang, setRealtimeToLang] = useState<string>("");
+  
+  // 添加实时消息ID引用
+  const realtimeMessageIdRef = useRef<string>("");
+  
+  // 函数：更新或创建实时转写和翻译消息
+  const updateRealtimeMessage = () => {
+    const existingId = realtimeMessageIdRef.current;
+    
+    // 构建显示内容
+    let content = "";
+    
+    // 添加转写内容
+    if (realtimeTranscript) {
+      content += `原文 (${getFriendlyLanguageName(realtimeFromLang || 'unknown')}):\n${realtimeTranscript}\n\n`;
+    } else {
+      content += "正在聆听...\n\n";
+    }
+    
+    // 添加翻译内容
+    if (realtimeTranslation) {
+      content += `翻译 (${getFriendlyLanguageName(realtimeToLang || 'unknown')}):\n${realtimeTranslation}`;
+    } else if (realtimeTranscript) {
+      content += "正在翻译...";
+    }
+    
+    if (existingId && transcriptItems.some(item => item.itemId === existingId)) {
+      // 更新已有消息
+      updateTranscriptMessage(existingId, content, false);
+    } else {
+      // 创建新消息
+      const newId = uuidv4().slice(0, 32);
+      realtimeMessageIdRef.current = newId;
+      addTranscriptMessage(newId, "user", content);
+    }
+  };
 
   const sendClientEvent = (eventObj: any, eventNameSuffix = "") => {
     if (dcRef.current && dcRef.current.readyState === "open") {
@@ -683,6 +718,10 @@ function App() {
         setRealtimeFromLang("");
         setRealtimeToLang("");
         
+        // 创建一个新的实时消息
+        realtimeMessageIdRef.current = "";
+        updateRealtimeMessage();
+        
         // 启动Azure语音服务
         startAzureSpeechRecognition(targetLangCode);
         setAzureListening(true);
@@ -718,13 +757,28 @@ function App() {
       stopAzureSpeechRecognition();
       setAzureListening(false);
       
+      // 获取实时消息ID
+      const realtimeMessageId = realtimeMessageIdRef.current;
+      
       // 如果有转写结果，发送给OpenAI
       if (realtimeTranscript && realtimeTranscript.trim()) {
         console.log("发送最终转写结果给OpenAI:", realtimeTranscript);
         
         try {
+          // 如果有实时消息，将其隐藏
+          if (realtimeMessageId) {
+            // 找到消息并标记为隐藏
+            updateTranscriptMessage(realtimeMessageId, "", false);
+            updateTranscriptItemStatus(realtimeMessageId, "DONE");
+            // 标记为隐藏 - 使用TranscriptContext中的方法而不是直接修改状态
+            toggleTranscriptItemExpand(realtimeMessageId);
+          }
+          
           // 使用最终的转写结果发送给OpenAI
           sendSimulatedUserMessage(realtimeTranscript);
+          
+          // 重置实时消息ID
+          realtimeMessageIdRef.current = "";
           
           // 不需要提交录音缓冲区或触发响应创建，因为sendSimulatedUserMessage已经做了
           return;
@@ -733,6 +787,15 @@ function App() {
         }
       } else {
         console.log("Azure未提供有效的转写结果，回退到OpenAI处理");
+        
+        // 如果有实时消息但没有有效的转写结果，隐藏实时消息
+        if (realtimeMessageId) {
+          updateTranscriptMessage(realtimeMessageId, "", false);
+          updateTranscriptItemStatus(realtimeMessageId, "DONE");
+          // 标记为隐藏 - 使用TranscriptContext中的方法而不是直接修改状态
+          toggleTranscriptItemExpand(realtimeMessageId);
+          realtimeMessageIdRef.current = "";
+        }
       }
     }
     
@@ -1051,18 +1114,24 @@ function App() {
     };
   };
 
-  // 确保在实时转写和翻译状态中有变化时输出日志
+  // 确保在实时转写和翻译状态中有变化时输出日志并更新消息
   useEffect(() => {
     if (realtimeTranscript) {
       console.log("实时转写更新:", realtimeTranscript);
+      if (azureListening) {
+        updateRealtimeMessage();
+      }
     }
-  }, [realtimeTranscript]);
+  }, [realtimeTranscript, azureListening]);
 
   useEffect(() => {
     if (realtimeTranslation) {
       console.log("实时翻译更新:", realtimeTranslation);
+      if (azureListening) {
+        updateRealtimeMessage();
+      }
     }
-  }, [realtimeTranslation]);
+  }, [realtimeTranslation, azureListening]);
 
   // 初始化Azure语音服务
   useEffect(() => {
@@ -1330,19 +1399,6 @@ function App() {
           )}
         </div>
       )}
-
-      {/* 修改实时转写和翻译显示区域，使其始终可见 */}
-      <div className={`absolute top-20 left-0 right-0 bg-white shadow-lg rounded-md mx-5 p-3 z-10 transition-all ${azureListening ? 'opacity-100' : 'opacity-0'}`} style={{display: azureListening ? 'block' : 'none'}}>
-        <div className="mb-2">
-          <div className="text-sm font-medium text-gray-500">实时转写 ({getFriendlyLanguageName(realtimeFromLang || 'unknown')}):</div>
-          <div className="mt-1 p-2 bg-gray-50 rounded min-h-[24px]">{realtimeTranscript || '正在聆听...'}</div>
-        </div>
-        
-        <div>
-          <div className="text-sm font-medium text-gray-500">实时翻译 ({getFriendlyLanguageName(realtimeToLang || 'unknown')}):</div>
-          <div className="mt-1 p-2 bg-gray-50 rounded min-h-[24px]">{realtimeTranslation || '等待转写...'}</div>
-        </div>
-      </div>
     </div>
   );
 }
