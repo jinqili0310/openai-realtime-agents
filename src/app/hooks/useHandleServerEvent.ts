@@ -18,6 +18,8 @@ export interface UseHandleServerEventParams {
   mainLang?: string;
   lastTargetLang?: string;
   shouldForceResponse?: boolean;
+  updateTranscriptMessage?: (itemId: string, content: string, shouldProcess: boolean) => void;
+  updateTranscriptItemStatus?: (itemId: string, status: "PENDING" | "IN_PROGRESS" | "DONE" | "ERROR") => void;
 }
 
 export function useHandleServerEvent({
@@ -32,6 +34,8 @@ export function useHandleServerEvent({
   setIsFirstMessage,
   mainLang,
   lastTargetLang,
+  updateTranscriptMessage: externalUpdateTranscriptMessage,
+  updateTranscriptItemStatus: externalUpdateTranscriptItemStatus,
 }: UseHandleServerEventParams) {
   const {
     transcriptItems,
@@ -130,6 +134,68 @@ export function useHandleServerEvent({
       }
       
       return;
+    }
+
+    // 处理OpenAI实时转写回复和更新实时消息 - 修复事件类型匹配
+    if (
+      (serverEvent.type === "conversation.item.created" || 
+       serverEvent.type === "conversation.item.updated" ||
+       serverEvent.type === "response.audio_transcript.delta" ||
+       serverEvent.type === "response.output_item.done") &&
+      serverEvent.item?.role === "assistant" &&
+      typeof window !== "undefined" &&
+      window.lastTranslationId && 
+      window.lastTranscriptId
+    ) {
+      // 从事件中提取文本内容
+      const assistantText = serverEvent.item.content?.find(c => c.type === "text")?.text || "";
+      
+      console.log("收到助手回复，准备更新实时翻译消息:", assistantText);
+      
+      if (assistantText && externalUpdateTranscriptMessage && externalUpdateTranscriptItemStatus) {
+        // 更新翻译消息为助手的响应
+        externalUpdateTranscriptMessage(window.lastTranslationId, assistantText, false);
+        externalUpdateTranscriptItemStatus(window.lastTranslationId, "DONE");
+        
+        // 更新转写消息内容并设为完成状态
+        externalUpdateTranscriptMessage(window.lastTranscriptId, 
+          transcriptItems.find(item => item.itemId === window.lastTranscriptId)?.title || "", 
+          false);
+        externalUpdateTranscriptItemStatus(window.lastTranscriptId, "DONE");
+        
+        console.log("已更新实时消息为最终结果");
+        
+        // 完成处理后清除引用
+        window.lastTranslationId = null;
+        window.lastTranscriptId = null;
+        
+        // 如果是'created'事件，跳过后续处理
+        if (serverEvent.type === "conversation.item.created") {
+          return;
+        }
+      }
+    }
+
+    // 处理特定的转写完成和增量更新事件
+    if (typeof window !== "undefined" && window.lastTranscriptId && window.lastTranslationId) {
+      // 处理增量更新
+      if (serverEvent.type === "response.audio_transcript.delta" && serverEvent.delta) {
+        console.log("处理增量更新:", serverEvent.delta);
+        if (externalUpdateTranscriptMessage && window.lastTranslationId) {
+          externalUpdateTranscriptMessage(window.lastTranslationId, serverEvent.delta, true);
+        }
+      }
+      
+      // 处理转写完成事件
+      if (serverEvent.type === "conversation.item.input_audio_transcription.completed" && 
+          serverEvent.transcript && 
+          serverEvent.item_id === window.lastTranscriptId) {
+        console.log("处理转写完成:", serverEvent.transcript);
+        if (externalUpdateTranscriptMessage) {
+          // 更新用户转写内容
+          externalUpdateTranscriptMessage(window.lastTranscriptId, serverEvent.transcript, false);
+        }
+      }
     }
 
     switch (serverEvent.type) {

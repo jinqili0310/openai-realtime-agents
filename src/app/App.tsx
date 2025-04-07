@@ -51,6 +51,20 @@ const getFriendlyLanguageName = (code: string): string => {
   return languageCodeToName[code] || code;
 };
 
+// 添加window类型扩展
+declare global {
+  interface Window {
+    lastTranscriptId: string | null;
+    lastTranslationId: string | null;
+  }
+}
+
+// 初始化全局变量
+if (typeof window !== 'undefined') {
+  window.lastTranscriptId = null;
+  window.lastTranslationId = null;
+}
+
 function App() {
   const searchParams = useSearchParams();
 
@@ -139,7 +153,8 @@ function App() {
     } else if (realtimeTranscript) {
       content = "正在翻译...";
     } else {
-      content = "等待输入...";
+      // 如果没有任何内容，不创建或更新消息
+      return;
     }
     
     if (existingId && transcriptItems.some(item => item.itemId === existingId)) {
@@ -181,6 +196,8 @@ function App() {
     setIsFirstMessage,
     mainLang,
     lastTargetLang,
+    updateTranscriptMessage,
+    updateTranscriptItemStatus: (itemId: string, status: any) => updateTranscriptItemStatus(itemId, status === "PENDING" || status === "ERROR" ? "IN_PROGRESS" : status)
   });
 
   useEffect(() => {
@@ -782,38 +799,37 @@ function App() {
       
       // 获取实时消息ID
       const transcriptMessageId = realtimeTranscriptMessageIdRef.current;
-      const translationMessageId = realtimeTranslationMessageIdRef.current;
+      let translationMessageId = realtimeTranslationMessageIdRef.current;
       
       // 如果有转写结果，发送给OpenAI
       if (realtimeTranscript && realtimeTranscript.trim()) {
         console.log("发送最终转写结果给OpenAI:", realtimeTranscript);
         
         try {
-          // 如果有实时消息，将其隐藏
+          // 保持实时转写和翻译消息不变，不添加"处理中"状态
           if (transcriptMessageId) {
-            // 找到消息并标记为隐藏
-            updateTranscriptMessage(transcriptMessageId, "", false);
-            updateTranscriptItemStatus(transcriptMessageId, "DONE");
-            // 标记为隐藏 - 使用TranscriptContext中的方法而不是直接修改状态
-            toggleTranscriptItemExpand(transcriptMessageId);
+            // 将状态设为IN_PROGRESS但不改变内容
+            updateTranscriptItemStatus(transcriptMessageId, "IN_PROGRESS");
           }
           
-          if (translationMessageId) {
-            // 找到消息并标记为隐藏
+          // 只有在有翻译消息ID且有内容时才处理
+          if (translationMessageId && realtimeTranslation && realtimeTranslation.trim()) {
+            // 将状态设为IN_PROGRESS但不改变内容
+            updateTranscriptItemStatus(translationMessageId, "IN_PROGRESS");
+          } else if (translationMessageId) {
+            // 如果有ID但没有内容，隐藏消息
             updateTranscriptMessage(translationMessageId, "", false);
             updateTranscriptItemStatus(translationMessageId, "DONE");
-            // 标记为隐藏 - 使用TranscriptContext中的方法而不是直接修改状态
             toggleTranscriptItemExpand(translationMessageId);
+            realtimeTranslationMessageIdRef.current = "";
+            translationMessageId = ""; // 确保不会发送给后续处理
           }
           
-          // 使用最终的转写结果发送给OpenAI
-          sendSimulatedUserMessage(realtimeTranscript);
+          // 使用自定义函数发送用户消息，不创建新消息而是复用实时消息
+          sendCustomUserMessage(realtimeTranscript, transcriptMessageId, translationMessageId);
           
-          // 重置实时消息ID
-          realtimeTranscriptMessageIdRef.current = "";
-          realtimeTranslationMessageIdRef.current = "";
+          // 不重置实时消息ID，因为后续会更新这些消息
           
-          // 不需要提交录音缓冲区或触发响应创建，因为sendSimulatedUserMessage已经做了
           return;
         } catch (error) {
           console.error("使用Azure转写结果发送消息失败:", error);
@@ -851,6 +867,40 @@ function App() {
     } catch (error) {
       console.error("Error in handleTalkButtonUp:", error);
     }
+  };
+
+  // 修改自定义发送用户消息函数
+  const sendCustomUserMessage = (text: string, transcriptId: string, translationId: string) => {
+    // 如果没有有效的转写消息ID，创建一个新的消息
+    const messageId = transcriptId || uuidv4().slice(0, 32);
+    
+    // 如果我们不使用转写消息ID，添加一个新消息
+    if (!transcriptId) {
+      addTranscriptMessage(messageId, "user", text, true);
+    }
+
+    // 保存消息ID，以便在服务器响应中使用
+    if (typeof window !== 'undefined') {
+      window.lastTranscriptId = transcriptId;
+      window.lastTranslationId = translationId;
+    }
+
+    sendClientEvent(
+      {
+        type: "conversation.item.create",
+        item: {
+          id: messageId,
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text }],
+        },
+      },
+      "(custom user text message)"
+    );
+    sendClientEvent(
+      { type: "response.create" },
+      "(trigger response after custom user text message)"
+    );
   };
 
   const onToggleConnection = () => {

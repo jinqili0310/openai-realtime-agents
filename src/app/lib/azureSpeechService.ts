@@ -251,10 +251,10 @@ async function initWebSpeechRecognition(): Promise<boolean> {
     webRecognizer.lang = 'zh-CN'; 
     webRecognizer.maxAlternatives = 1;
     
-    // 停顿处理相关变量
+    // 停顿处理相关变量 - 增加停顿容忍时间
     let restartTimeout: any = null;
     let lastResultTimestamp = Date.now();
-    const PAUSE_THRESHOLD = 2000; // 2秒停顿阈值
+    const PAUSE_THRESHOLD = 5000; // 增加到5秒的停顿阈值，使系统更加容忍停顿
     let isPaused = false;
     
     // 存储到全局变量
@@ -266,7 +266,9 @@ async function initWebSpeechRecognition(): Promise<boolean> {
       lastTranscript: '',
       isRecognitionActive: false,
       isAttemptingRestart: false,
-      manualStopped: false
+      manualStopped: false,
+      pauseCount: 0, // 添加停顿计数器
+      maxPauseCount: 3 // 允许的最大停顿次数，之后才真正停止
     };
     
     // 设置事件
@@ -325,103 +327,112 @@ async function initWebSpeechRecognition(): Promise<boolean> {
         }
       }
       
-      // 设置停顿检测器 - 如果用户停顿太久，自动重启识别器
+      // 设置停顿检测器 - 优化自动重启机制
       setAutoPauseDetector();
     };
     
     // 添加停顿自动重启功能
     const setAutoPauseDetector = () => {
-      // 清除现有的超时
+      // 清除任何现有的暂停检测器
       if (restartTimeout) {
         clearTimeout(restartTimeout);
       }
       
-      // 如果已经在监听中，设置新的超时
-      if (isListening) {
-        restartTimeout = setTimeout(() => {
-          console.log(`检测到停顿(${PAUSE_THRESHOLD}ms)，准备重启识别器...`);
-          
-          // 检查当前识别状态
-          const currentState = (window as any).speechRecognitionState || {};
-          const recognitionActive = currentState.isRecognitionActive || false;
-          
-          try {
-            // 只有在确认识别器已停止的情况下才尝试停止
-            if (recognitionActive) {
-              console.log('当前识别器仍在活动中，无需重启');
-              // 更新时间戳以防止频繁检测
-              (window as any).speechRecognitionState.lastResultTimestamp = Date.now();
-              return;
-            }
-            
-            // 只在识别器实际已停止的情况下进行重启
-            console.log('识别器已停止，尝试重启...');
-            
-            // 尝试优雅地停止然后重启
-            try {
-              (window as any).webRecognizer.stop();
-              console.log('语音识别器已停止，准备重启');
-            } catch (stopError) {
-              // 如果停止失败，可能已经停止，继续尝试重启
-              console.log('停止识别器可能失败或已经停止:', stopError);
-            }
-            
-            // 短延迟后重启
-            setTimeout(() => {
-              try {
-                // 再次检查是否真的需要重启
-                if (!(window as any).speechRecognitionState.isRecognitionActive && !currentState.manualStopped) {
-                  console.log('尝试重启语音识别器...');
-                  
-                  // 设置状态为正在尝试启动
-                  (window as any).speechRecognitionState.isAttemptingRestart = true;
-                  
-                  (window as any).webRecognizer.start();
-                  console.log('语音识别器已重启');
-                  
-                  // 标记识别为活动状态
-                  (window as any).speechRecognitionState.isRecognitionActive = true;
-                  
-                  // 更新时间戳
-                  (window as any).speechRecognitionState.lastResultTimestamp = Date.now();
-                  
-                  // 清除尝试重启标志
-                  setTimeout(() => {
-                    (window as any).speechRecognitionState.isAttemptingRestart = false;
-                  }, 500);
-                  
-                  // 恢复上次的转写结果
-                  if ((window as any).speechRecognitionState.lastTranscript) {
-                    console.log('恢复上次转写结果:', (window as any).speechRecognitionState.lastTranscript);
-                    // 恢复上次的转写结果到UI
-                    onTranscriptionCallback({
-                      text: (window as any).speechRecognitionState.lastTranscript,
-                      language: 'zh-CN',
-                      isFinal: true
-                    });
-                  }
-                } else {
-                  console.log('识别器已经在活动中或已手动停止，跳过重启');
-                }
-              } catch (err) {
-                console.error('重启语音识别器失败:', err);
-                // 重置识别状态
-                (window as any).speechRecognitionState.isRecognitionActive = false;
-                (window as any).speechRecognitionState.isAttemptingRestart = false;
-                isListening = false;
-              }
-            }, 500);
-            
-          } catch (err) {
-            console.error('停止语音识别器失败:', err);
-            // 重置识别状态
-            (window as any).speechRecognitionState.isRecognitionActive = false;
-          }
-        }, PAUSE_THRESHOLD);
-        
-        // 保存超时引用
-        (window as any).speechRecognitionState.restartTimeout = restartTimeout;
+      // 如果是手动停止，则不设置自动重启
+      if ((window as any).speechRecognitionState.manualStopped) {
+        console.log('手动停止模式，不设置停顿检测');
+        return;
       }
+      
+      // 设置新的停顿检测器
+      restartTimeout = setTimeout(() => {
+        const currentTime = Date.now();
+        const timeSinceLastResult = currentTime - lastResultTimestamp;
+        
+        console.log(`停顿检测: 自上次结果已过去 ${timeSinceLastResult}ms，阈值为 ${PAUSE_THRESHOLD}ms`);
+        
+        // 如果超过阈值且识别器处于活动状态
+        if (timeSinceLastResult > PAUSE_THRESHOLD && (window as any).speechRecognitionState.isRecognitionActive) {
+          // 递增停顿计数
+          (window as any).speechRecognitionState.pauseCount++;
+          console.log(`检测到停顿 #${(window as any).speechRecognitionState.pauseCount}/${(window as any).speechRecognitionState.maxPauseCount}`);
+          
+          // 如果停顿计数小于最大允许值，尝试静默重启而不是停止
+          if ((window as any).speechRecognitionState.pauseCount < (window as any).speechRecognitionState.maxPauseCount) {
+            console.log('短暂停顿，等待用户继续...');
+            
+            // 更新用户界面，但保持识别状态
+            if ((window as any).speechRecognitionState.lastTranscript) {
+              // 通知UI有短暂停顿，但不影响实际内容
+              onTranscriptionCallback({
+                text: (window as any).speechRecognitionState.lastTranscript,
+                language: 'zh-CN',
+                isFinal: false
+              });
+            }
+            
+            // 重新设置停顿检测器
+            setAutoPauseDetector();
+          } else {
+            // 如果达到最大停顿次数，则重启识别器
+            console.log(`达到最大停顿次数(${(window as any).speechRecognitionState.maxPauseCount})，重启识别器`);
+            isPaused = true;
+            (window as any).speechRecognitionState.isPaused = true;
+            (window as any).speechRecognitionState.isRecognitionActive = false;
+            
+            try {
+              // 尝试停止识别器
+              if (!(window as any).speechRecognitionState.isAttemptingRestart) {
+                (window as any).speechRecognitionState.isAttemptingRestart = true;
+                
+                // 重置停顿计数
+                (window as any).speechRecognitionState.pauseCount = 0;
+                
+                // 停止然后重新启动
+                webRecognizer.stop();
+                console.log('识别器已停止，准备重启');
+                
+                // 延迟一下再重启，让系统有时间完全停止
+                setTimeout(() => {
+                  if (!(window as any).speechRecognitionState.manualStopped) {
+                    console.log('重新启动识别器');
+                    try {
+                      webRecognizer.start();
+                      isPaused = false;
+                      (window as any).speechRecognitionState.isPaused = false;
+                      (window as any).speechRecognitionState.isAttemptingRestart = false;
+                      console.log('识别器重启成功');
+                      
+                      // 如果重启成功，保留之前的转写结果
+                      if ((window as any).speechRecognitionState.lastTranscript) {
+                        // 保持之前的转写结果，同时通知用户识别已恢复
+                        setTimeout(() => {
+                          onTranscriptionCallback({
+                            text: (window as any).speechRecognitionState.lastTranscript,
+                            language: 'zh-CN',
+                            isFinal: false
+                          });
+                        }, 100);
+                      }
+                    } catch (restartError) {
+                      console.error('识别器重启失败:', restartError);
+                      (window as any).speechRecognitionState.isAttemptingRestart = false;
+                    }
+                  } else {
+                    console.log('识别已手动停止，跳过重启');
+                    (window as any).speechRecognitionState.isAttemptingRestart = false;
+                  }
+                }, 300);
+              }
+            } catch (stopError) {
+              console.error('停止识别器失败:', stopError);
+              (window as any).speechRecognitionState.isAttemptingRestart = false;
+            }
+          }
+        }
+      }, PAUSE_THRESHOLD / 2); // 设置检测间隔为阈值的一半，更快响应
+      
+      (window as any).speechRecognitionState.restartTimeout = restartTimeout;
     };
     
     // 添加各种错误处理
@@ -539,63 +550,53 @@ export function startAzureSpeechRecognition(targetLanguage: string = 'en-US') {
 
 // 内部启动函数
 function startRecognitionInternal(targetLanguage: string) {
-  // 检查Web Speech API
-  if ((window as any).webRecognizer) {
-    console.log('使用Web Speech API开始识别');
-    try {
-      // 检查识别器当前是否已经在活动中
-      if ((window as any).speechRecognitionState.isRecognitionActive) {
-        console.log('识别器已经在活动中，不需要重新启动');
-        isListening = true;
-        return;
-      }
-      
-      // 重置手动停止标志
-      (window as any).manualStopped = false;
+  try {
+    console.log(`内部启动语音识别，目标语言: ${targetLanguage}`);
+    
+    // 确保不在尝试重启中
+    (window as any).speechRecognitionState.isAttemptingRestart = false;
+    
+    // 重置停顿计数
+    if ((window as any).speechRecognitionState) {
+      (window as any).speechRecognitionState.pauseCount = 0;
       (window as any).speechRecognitionState.manualStopped = false;
-      
-      // 清空之前的转写记录
-      (window as any).speechRecognitionState.lastTranscript = '';
-      
-      // 设置状态为正在尝试启动
-      (window as any).speechRecognitionState.isAttemptingRestart = true;
-      
-      // 启动识别
-      (window as any).webRecognizer.start();
-      isListening = true;
-      
-      console.log('Web Speech API识别已启动');
-      
-      // 清除尝试启动标志
-      setTimeout(() => {
-        (window as any).speechRecognitionState.isAttemptingRestart = false;
-      }, 500);
-    } catch (webSpeechError: any) {
-      console.error('启动Web Speech识别失败:', webSpeechError);
-      
-      // 如果错误是因为识别已经开始，则更新状态
-      if (webSpeechError.toString && webSpeechError.toString().includes('recognition has already started')) {
-        console.log('识别已经开始，更新状态');
-        (window as any).speechRecognitionState.isRecognitionActive = true;
-        isListening = true;
-      }
-      
-      // 清除尝试启动标志
-      (window as any).speechRecognitionState.isAttemptingRestart = false;
+      (window as any).speechRecognitionState.lastResultTimestamp = Date.now();
     }
-    return;
-  }
-  
-  // 使用Azure服务
-  if (recognizer) {
-    console.log('使用Azure语音服务开始识别');
-    recognizer.startContinuousRecognitionAsync(
-      () => {
-        console.log('Azure实时转写已启动');
+    
+    // 检查Web Speech API
+    if ((window as any).webRecognizer) {
+      console.log('使用Web Speech API开始识别');
+      try {
+        (window as any).webRecognizer.start();
+        (window as any).speechRecognitionState.isRecognitionActive = true;
+        console.log('Web Speech API识别器已启动');
         isListening = true;
-      },
-      (err: Error) => console.error('启动Azure实时转写失败:', err)
-    );
+      } catch (webSpeechError: any) {
+        console.error('启动Web Speech识别失败:', webSpeechError);
+        
+        // 如果错误是因为已经在运行，则认为是成功的
+        if (webSpeechError.name === 'InvalidStateError') {
+          console.log('识别器已经在运行中');
+          (window as any).speechRecognitionState.isRecognitionActive = true;
+          isListening = true;
+        }
+      }
+      return;
+    }
+    
+    // 使用Azure服务
+    if (recognizer) {
+      console.log('使用Azure语音服务开始识别');
+      recognizer.startContinuousRecognitionAsync(
+        () => {
+          console.log('Azure实时转写已启动');
+          isListening = true;
+        },
+        (err: Error) => console.error('启动Azure实时转写失败:', err)
+      );
+    }
+  } catch (error) {
+    console.error('启动语音识别失败:', error);
   }
 }
 
