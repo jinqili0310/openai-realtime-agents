@@ -97,28 +97,22 @@ function App() {
   const [realtimeFromLang, setRealtimeFromLang] = useState<string>("");
   const [realtimeToLang, setRealtimeToLang] = useState<string>("");
   
-  // 添加实时消息ID引用
-  const realtimeMessageIdRef = useRef<string>("");
+  // 添加实时消息ID引用 - 分别为转写和翻译
+  const realtimeTranscriptMessageIdRef = useRef<string>("");
+  const realtimeTranslationMessageIdRef = useRef<string>("");
   
-  // 函数：更新或创建实时转写和翻译消息
-  const updateRealtimeMessage = () => {
-    const existingId = realtimeMessageIdRef.current;
+  // 函数：更新或创建实时转写消息（用户侧）
+  const updateRealtimeTranscriptMessage = () => {
+    const existingId = realtimeTranscriptMessageIdRef.current;
     
-    // 构建显示内容
+    // 构建显示内容 - 只包含转写
     let content = "";
     
     // 添加转写内容
     if (realtimeTranscript) {
-      content += `原文 (${getFriendlyLanguageName(realtimeFromLang || 'unknown')}):\n${realtimeTranscript}\n\n`;
+      content = `${realtimeTranscript}`;
     } else {
-      content += "正在聆听...\n\n";
-    }
-    
-    // 添加翻译内容
-    if (realtimeTranslation) {
-      content += `翻译 (${getFriendlyLanguageName(realtimeToLang || 'unknown')}):\n${realtimeTranslation}`;
-    } else if (realtimeTranscript) {
-      content += "正在翻译...";
+      content = "正在聆听...";
     }
     
     if (existingId && transcriptItems.some(item => item.itemId === existingId)) {
@@ -127,8 +121,35 @@ function App() {
     } else {
       // 创建新消息
       const newId = uuidv4().slice(0, 32);
-      realtimeMessageIdRef.current = newId;
+      realtimeTranscriptMessageIdRef.current = newId;
       addTranscriptMessage(newId, "user", content);
+    }
+  };
+  
+  // 函数：更新或创建实时翻译消息（agent侧）
+  const updateRealtimeTranslationMessage = () => {
+    const existingId = realtimeTranslationMessageIdRef.current;
+    
+    // 构建显示内容 - 只包含翻译
+    let content = "";
+    
+    // 添加语言标识和翻译内容
+    if (realtimeTranslation) {
+      content = `${realtimeTranslation}`;
+    } else if (realtimeTranscript) {
+      content = "正在翻译...";
+    } else {
+      content = "等待输入...";
+    }
+    
+    if (existingId && transcriptItems.some(item => item.itemId === existingId)) {
+      // 更新已有消息
+      updateTranscriptMessage(existingId, content, false);
+    } else {
+      // 创建新消息
+      const newId = uuidv4().slice(0, 32);
+      realtimeTranslationMessageIdRef.current = newId;
+      addTranscriptMessage(newId, "assistant", content);
     }
   };
 
@@ -718,9 +739,11 @@ function App() {
         setRealtimeFromLang("");
         setRealtimeToLang("");
         
-        // 创建一个新的实时消息
-        realtimeMessageIdRef.current = "";
-        updateRealtimeMessage();
+        // 创建新的实时转写和翻译消息
+        realtimeTranscriptMessageIdRef.current = "";
+        realtimeTranslationMessageIdRef.current = "";
+        updateRealtimeTranscriptMessage();
+        updateRealtimeTranslationMessage();
         
         // 启动Azure语音服务
         startAzureSpeechRecognition(targetLangCode);
@@ -758,7 +781,8 @@ function App() {
       setAzureListening(false);
       
       // 获取实时消息ID
-      const realtimeMessageId = realtimeMessageIdRef.current;
+      const transcriptMessageId = realtimeTranscriptMessageIdRef.current;
+      const translationMessageId = realtimeTranslationMessageIdRef.current;
       
       // 如果有转写结果，发送给OpenAI
       if (realtimeTranscript && realtimeTranscript.trim()) {
@@ -766,19 +790,28 @@ function App() {
         
         try {
           // 如果有实时消息，将其隐藏
-          if (realtimeMessageId) {
+          if (transcriptMessageId) {
             // 找到消息并标记为隐藏
-            updateTranscriptMessage(realtimeMessageId, "", false);
-            updateTranscriptItemStatus(realtimeMessageId, "DONE");
+            updateTranscriptMessage(transcriptMessageId, "", false);
+            updateTranscriptItemStatus(transcriptMessageId, "DONE");
             // 标记为隐藏 - 使用TranscriptContext中的方法而不是直接修改状态
-            toggleTranscriptItemExpand(realtimeMessageId);
+            toggleTranscriptItemExpand(transcriptMessageId);
+          }
+          
+          if (translationMessageId) {
+            // 找到消息并标记为隐藏
+            updateTranscriptMessage(translationMessageId, "", false);
+            updateTranscriptItemStatus(translationMessageId, "DONE");
+            // 标记为隐藏 - 使用TranscriptContext中的方法而不是直接修改状态
+            toggleTranscriptItemExpand(translationMessageId);
           }
           
           // 使用最终的转写结果发送给OpenAI
           sendSimulatedUserMessage(realtimeTranscript);
           
           // 重置实时消息ID
-          realtimeMessageIdRef.current = "";
+          realtimeTranscriptMessageIdRef.current = "";
+          realtimeTranslationMessageIdRef.current = "";
           
           // 不需要提交录音缓冲区或触发响应创建，因为sendSimulatedUserMessage已经做了
           return;
@@ -789,12 +822,20 @@ function App() {
         console.log("Azure未提供有效的转写结果，回退到OpenAI处理");
         
         // 如果有实时消息但没有有效的转写结果，隐藏实时消息
-        if (realtimeMessageId) {
-          updateTranscriptMessage(realtimeMessageId, "", false);
-          updateTranscriptItemStatus(realtimeMessageId, "DONE");
+        if (transcriptMessageId) {
+          updateTranscriptMessage(transcriptMessageId, "", false);
+          updateTranscriptItemStatus(transcriptMessageId, "DONE");
           // 标记为隐藏 - 使用TranscriptContext中的方法而不是直接修改状态
-          toggleTranscriptItemExpand(realtimeMessageId);
-          realtimeMessageIdRef.current = "";
+          toggleTranscriptItemExpand(transcriptMessageId);
+          realtimeTranscriptMessageIdRef.current = "";
+        }
+        
+        if (translationMessageId) {
+          updateTranscriptMessage(translationMessageId, "", false);
+          updateTranscriptItemStatus(translationMessageId, "DONE");
+          // 标记为隐藏 - 使用TranscriptContext中的方法而不是直接修改状态
+          toggleTranscriptItemExpand(translationMessageId);
+          realtimeTranslationMessageIdRef.current = "";
         }
       }
     }
@@ -1119,7 +1160,7 @@ function App() {
     if (realtimeTranscript) {
       console.log("实时转写更新:", realtimeTranscript);
       if (azureListening) {
-        updateRealtimeMessage();
+        updateRealtimeTranscriptMessage();
       }
     }
   }, [realtimeTranscript, azureListening]);
@@ -1128,7 +1169,7 @@ function App() {
     if (realtimeTranslation) {
       console.log("实时翻译更新:", realtimeTranslation);
       if (azureListening) {
-        updateRealtimeMessage();
+        updateRealtimeTranslationMessage();
       }
     }
   }, [realtimeTranslation, azureListening]);
