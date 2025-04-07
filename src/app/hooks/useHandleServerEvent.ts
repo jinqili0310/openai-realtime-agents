@@ -230,6 +230,13 @@ export function useHandleServerEvent({
           break;
         }
 
+        // 检查是否为空消息并且用户已经有实时消息ID
+        if (role === "assistant" && (!text || text.trim() === "") && 
+            typeof window !== "undefined" && window.lastTranscriptId) {
+          console.log("跳过创建无内容的助手消息");
+          break;
+        }
+
         if (itemId && role) {
           if (role === "user" && !text) {
             text = "[Transcribing...]";

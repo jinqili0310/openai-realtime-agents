@@ -21,7 +21,14 @@ import { useHandleServerEvent } from "./hooks/useHandleServerEvent";
 
 // Utilities
 import { createRealtimeConnection } from "./lib/realtimeConnection";
-import { initAzureSpeechService, startAzureSpeechRecognition, stopAzureSpeechRecognition, updateTargetLanguage, disposeAzureSpeechService } from "./lib/azureSpeechService";
+import {
+  initAzureSpeechService,
+  startAzureSpeechRecognition,
+  stopAzureSpeechRecognition,
+  updateTargetLanguage,
+  disposeAzureSpeechService,
+  registerAzureCallbacks
+} from "./lib/azureSpeechService";
 
 // Agent configs
 import { allAgentSets, defaultAgentSetKey } from "@/app/agentConfigs";
@@ -123,7 +130,7 @@ function App() {
     let content = "";
     
     // 添加转写内容
-    if (realtimeTranscript) {
+    if (realtimeTranscript && realtimeTranscript.trim()) {
       content = `${realtimeTranscript}`;
     } else {
       content = "正在聆听...";
@@ -148,9 +155,9 @@ function App() {
     let content = "";
     
     // 添加语言标识和翻译内容
-    if (realtimeTranslation) {
+    if (realtimeTranslation && realtimeTranslation.trim()) {
       content = `${realtimeTranslation}`;
-    } else if (realtimeTranscript) {
+    } else if (realtimeTranscript && realtimeTranscript.trim()) {
       content = "正在翻译...";
     } else {
       // 如果没有任何内容，不创建或更新消息
@@ -750,21 +757,37 @@ function App() {
         else if (lastTargetLang === 'ja') targetLangCode = 'ja-JP';
         else if (lastTargetLang === 'ru') targetLangCode = 'ru-RU';
         
-        // 清空实时转写和翻译
+        // 强制标记老消息为完成
+        if (realtimeTranscriptMessageIdRef.current) {
+          // 如果有上一轮的消息，将其标记为完成
+          updateTranscriptItemStatus(realtimeTranscriptMessageIdRef.current, "DONE");
+        }
+        
+        if (realtimeTranslationMessageIdRef.current) {
+          // 如果有上一轮的消息，将其标记为完成
+          updateTranscriptItemStatus(realtimeTranslationMessageIdRef.current, "DONE");
+        }
+        
+        // 完全清空引用和状态 - 非常重要
+        realtimeTranscriptMessageIdRef.current = "";
+        realtimeTranslationMessageIdRef.current = "";
+        
+        // 清空实时转写和翻译 - 确保每次新录音完全重置状态
         setRealtimeTranscript("");
         setRealtimeTranslation("");
         setRealtimeFromLang("");
         setRealtimeToLang("");
         
-        // 创建新的实时转写和翻译消息
-        realtimeTranscriptMessageIdRef.current = "";
-        realtimeTranslationMessageIdRef.current = "";
-        updateRealtimeTranscriptMessage();
-        updateRealtimeTranslationMessage();
+        // 强制创建新的空消息 - 不依赖于转写和翻译状态
+        const newTranscriptId = uuidv4().slice(0, 32);
+        realtimeTranscriptMessageIdRef.current = newTranscriptId;
+        addTranscriptMessage(newTranscriptId, "user", "正在聆听...");
         
-        // 启动Azure语音服务
-        startAzureSpeechRecognition(targetLangCode);
-        setAzureListening(true);
+        // 在确保创建了新消息后再启动Azure
+        setTimeout(() => {
+          startAzureSpeechRecognition(targetLangCode);
+          setAzureListening(true);
+        }, 100);
       } catch (error) {
         console.error("启动Azure语音识别失败:", error);
         setAzureListening(false);
@@ -1205,24 +1228,58 @@ function App() {
     };
   };
 
-  // 确保在实时转写和翻译状态中有变化时输出日志并更新消息
+  // 修改Azure语音回调函数处理
   useEffect(() => {
-    if (realtimeTranscript) {
-      console.log("实时转写更新:", realtimeTranscript);
-      if (azureListening) {
-        updateRealtimeTranscriptMessage();
-      }
+    if (azureInitialized) {
+      // 定义转写和翻译的回调函数
+      const handleTranscription = (result: { text: string; language: string; isFinal: boolean }) => {
+        console.log(`Azure 转写: ${result.text}, 是最终结果: ${result.isFinal}`);
+        
+        // 始终使用最新的转写结果更新状态
+        setRealtimeTranscript(result.text);
+        setRealtimeFromLang(result.language);
+        
+        // 对于空结果或者初始结果，确保使用提示文本
+        if (!result.text || result.text.trim() === "") {
+          // 强制更新为提示文本
+          if (realtimeTranscriptMessageIdRef.current) {
+            updateTranscriptMessage(realtimeTranscriptMessageIdRef.current, "正在聆听...", false);
+          }
+        } else if (realtimeTranscriptMessageIdRef.current) {
+          // 对于有内容的结果，直接更新消息
+          updateTranscriptMessage(realtimeTranscriptMessageIdRef.current, result.text, false);
+        }
+      };
+      
+      const handleTranslation = (result: { 
+        originalText: string; 
+        translatedText: string; 
+        fromLanguage: string; 
+        toLanguage: string; 
+        isFinal: boolean 
+      }) => {
+        console.log(`Azure 翻译: ${result.translatedText}, 从 ${result.fromLanguage} 到 ${result.toLanguage}`);
+        setRealtimeTranslation(result.translatedText);
+        setRealtimeToLang(result.toLanguage);
+        
+        // 对于有效翻译内容，创建或更新翻译消息
+        if (result.translatedText && result.translatedText.trim()) {
+          if (realtimeTranslationMessageIdRef.current) {
+            // 更新已有消息
+            updateTranscriptMessage(realtimeTranslationMessageIdRef.current, result.translatedText, false);
+          } else {
+            // 创建新消息
+            const newId = uuidv4().slice(0, 32);
+            realtimeTranslationMessageIdRef.current = newId;
+            addTranscriptMessage(newId, "assistant", result.translatedText);
+          }
+        }
+      };
+      
+      // 注册回调函数到Azure服务
+      registerAzureCallbacks(handleTranscription, handleTranslation);
     }
-  }, [realtimeTranscript, azureListening]);
-
-  useEffect(() => {
-    if (realtimeTranslation) {
-      console.log("实时翻译更新:", realtimeTranslation);
-      if (azureListening) {
-        updateRealtimeTranslationMessage();
-      }
-    }
-  }, [realtimeTranslation, azureListening]);
+  }, [azureInitialized]);
 
   // 初始化Azure语音服务
   useEffect(() => {
@@ -1297,7 +1354,7 @@ function App() {
       disposeAzureSpeechService();
     };
   }, []);
-  
+
   // 当主语言或目标语言更新时，更新Azure翻译目标语言
   useEffect(() => {
     if (azureInitialized && lastTargetLang) {

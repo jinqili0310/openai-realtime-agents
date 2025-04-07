@@ -34,6 +34,16 @@ let currentRegionIndex = 0;
 let onTranscriptionCallback: TranscriptionCallback = (result) => console.log('默认转写回调:', result);
 let onTranslationCallback: TranslationCallback = (result) => console.log('默认翻译回调:', result);
 
+// 注册回调函数接口
+export function registerAzureCallbacks(
+  transcriptionCallback: TranscriptionCallback, 
+  translationCallback: TranslationCallback
+) {
+  console.log('注册Azure回调函数');
+  onTranscriptionCallback = transcriptionCallback;
+  onTranslationCallback = translationCallback;
+}
+
 // 存储转写文本，用于实时翻译
 let currentTranscript = '';
 
@@ -254,7 +264,7 @@ async function initWebSpeechRecognition(): Promise<boolean> {
     // 停顿处理相关变量 - 增加停顿容忍时间
     let restartTimeout: any = null;
     let lastResultTimestamp = Date.now();
-    const PAUSE_THRESHOLD = 5000; // 增加到5秒的停顿阈值，使系统更加容忍停顿
+    const PAUSE_THRESHOLD = 50000; // 增加到5秒的停顿阈值，使系统更加容忍停顿
     let isPaused = false;
     
     // 存储到全局变量
