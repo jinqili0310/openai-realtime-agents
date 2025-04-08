@@ -228,30 +228,52 @@ function App() {
           
           // 如果启用了音频播放，朗读翻译结果
           if (isAudioPlaybackEnabled) {
-            const utterance = new SpeechSynthesisUtterance(content);
-            utterance.lang = lastTargetLang === "zh" ? "zh-CN" : "en-US";
-            window.speechSynthesis.speak(utterance);
+            playTranslationTTS(content, lastTargetLang === "zh" ? "zh-CN" : "en-US");
           }
         }
       }
-    } else if (event.type === "response.output_item.done") {
-      // 处理翻译完成事件
+    } else if (event.type === "response.output_item.done" || event.type === "conversation.item.created") {
+      // Process translation events from both response.output_item.done and conversation.item.created
       const itemId = event.item?.id;
       const content = event.item?.content?.[0]?.text || "";
+      const role = event.item?.role || "";
       
-      if (itemId && content) {
-        console.log("Processing translation result:", { itemId, content });
+      // Make sure this is an assistant message
+      if (itemId && content && role === "assistant") {
+        console.log(`Processing ${event.type} result:`, { itemId, content });
+        
+        // Always display translation in transcript
         addTranscriptMessage(itemId, "assistant", content);
         
         // 如果启用了音频播放，朗读翻译结果
         if (isAudioPlaybackEnabled) {
-          const utterance = new SpeechSynthesisUtterance(content);
-          utterance.lang = lastTargetLang === "zh" ? "zh-CN" : "en-US";
-          window.speechSynthesis.speak(utterance);
+          playTranslationTTS(content, lastTargetLang === "zh" ? "zh-CN" : "en-US");
+        }
+      }
+    } else if (event.type === "conversation.item.updated") {
+      // Handle updated items, which may contain the latest translation
+      const itemId = event.item?.id;
+      const content = event.item?.content?.[0]?.text || "";
+      const role = event.item?.role || "";
+      
+      if (itemId && content && role === "assistant") {
+        console.log(`Processing updated message:`, { itemId, content });
+        
+        // Update the existing message or create a new one
+        const existingMessage = transcriptItems.find(item => item.itemId === itemId);
+        if (existingMessage) {
+          updateTranscriptMessage(itemId, content, false);
+        } else {
+          addTranscriptMessage(itemId, "assistant", content);
+        }
+        
+        // Play TTS for the updated content
+        if (isAudioPlaybackEnabled) {
+          playTranslationTTS(content, lastTargetLang === "zh" ? "zh-CN" : "en-US");
         }
       }
     }
-  }, [transcriptItems, isAudioPlaybackEnabled, lastTargetLang, addTranscriptMessage]);
+  }, [transcriptItems, isAudioPlaybackEnabled, lastTargetLang, addTranscriptMessage, updateTranscriptMessage, updateTranscriptItemStatus]);
 
   useEffect(() => {
     let finalAgentConfig = searchParams.get("agentConfig");
@@ -1107,7 +1129,7 @@ function App() {
         addTranscriptMessage(
           uuidv4().slice(0, 32),
           "assistant",
-          "🔊 音频已启用，您现在可以听到语音输出"
+          "🔊 Audio enabled, you can now hear voice output"
         );
       };
       const onPause = () => console.log("音频暂停");
@@ -1118,7 +1140,7 @@ function App() {
         addTranscriptMessage(
           uuidv4().slice(0, 32),
           "assistant",
-          "⚠️ 音频播放失败，请点击「播放音频」按钮手动启用声音"
+          "⚠️ Audio playback failed, please click the 'Play Audio' button to enable sound manually"
         );
       };
       
@@ -1171,7 +1193,7 @@ function App() {
             addTranscriptMessage(
               uuidv4().slice(0, 32),
               "assistant",
-              "请点击界面上的「播放音频」按钮以启用声音"
+              "Please click the 'Play Audio' button on the interface to enable sound"
             );
           });
       }
@@ -1278,22 +1300,40 @@ function App() {
         toLanguage: string; 
         isFinal: boolean 
       }) => {
-        // 只在最终结果时更新翻译
-        if (result.isFinal) {
-          console.log(`Azure 翻译: ${result.translatedText}, 从 ${result.fromLanguage} 到 ${result.toLanguage}`);
-          setRealtimeTranslation(result.translatedText);
-          setRealtimeToLang(result.toLanguage);
+        // Update the translation state
+        console.log(`Azure 翻译: ${result.translatedText}, 从 ${result.fromLanguage} 到 ${result.toLanguage}`);
+        setRealtimeTranslation(result.translatedText);
+        setRealtimeToLang(result.toLanguage);
+        
+        // Display the translation in the UI if it's a final result
+        if (result.isFinal && result.translatedText.trim()) {
+          // Create a new ID for the translation message if we don't have one
+          if (!realtimeTranslationMessageIdRef.current) {
+            realtimeTranslationMessageIdRef.current = uuidv4().slice(0, 32);
+          }
           
-          // 根据检测到的语言自动设置主语言和目标语言
-          if (result.fromLanguage) {
-            const detectedLang = result.fromLanguage.split('-')[0]; // 从 "zh-CN" 提取 "zh"
-            if (detectedLang === 'zh') {
-              setMainLang('zh'); // 如果检测到中文，设置主语言为中文
-              setLastTargetLang('en'); // 设置目标语言为英文
-            } else if (detectedLang === 'en') {
-              setMainLang('en'); // 如果检测到英文，设置主语言为英文
-              setLastTargetLang('zh'); // 设置目标语言为中文
-            }
+          // Add the translation to the transcript
+          addTranscriptMessage(
+            realtimeTranslationMessageIdRef.current,
+            "assistant",
+            result.translatedText
+          );
+          
+          // Play TTS for the translation but don't create a duplicate message
+          if (isAudioPlaybackEnabled) {
+            playTranslationTTS(result.translatedText, result.toLanguage);
+          }
+        }
+        
+        // Automatically set language preferences based on detected languages
+        if (result.fromLanguage) {
+          const detectedLang = result.fromLanguage.split('-')[0]; // 从 "zh-CN" 提取 "zh"
+          if (detectedLang === 'zh') {
+            setMainLang('zh'); // 如果检测到中文，设置主语言为中文
+            setLastTargetLang('en'); // 设置目标语言为英文
+          } else if (detectedLang === 'en') {
+            setMainLang('en'); // 如果检测到英文，设置主语言为英文
+            setLastTargetLang('zh'); // 设置目标语言为中文
           }
         }
       };
@@ -1301,7 +1341,7 @@ function App() {
       // 注册回调函数到Azure服务
       registerAzureCallbacks(handleTranscription, handleTranslation);
     }
-  }, [azureInitialized]);
+  }, [azureInitialized, isAudioPlaybackEnabled]);
 
   // 初始化Azure语音服务
   useEffect(() => {
@@ -1396,6 +1436,77 @@ function App() {
     }
   }, [azureInitialized, lastTargetLang]);
 
+  // Function to play TTS using Azure's voice synthesis with shimmer turbo voice
+  const playTranslationTTS = async (text: string, language: string) => {
+    if (!text || !isAudioPlaybackEnabled) return;
+    
+    try {
+      // Don't use TTS for system messages
+      if (text.startsWith('🔊') || text.startsWith('⚠️') || text.startsWith('Please click')) {
+        return;
+      }
+      
+      console.log(`Using Azure TTS with Shimmer voice for: "${text.substring(0, 30)}..."`);
+      
+      // Use Azure TTS API as primary option
+      try {
+        // Call our TTS API endpoint
+        const response = await fetch('/api/tts', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            text: text,
+            language: language // Let the API select the appropriate voice based on language
+          }),
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          console.error("Azure TTS API error:", errorData);
+          throw new Error(errorData.error || `TTS API error: ${response.statusText}`);
+        }
+        
+        // Get the audio data and play it
+        const audioData = await response.arrayBuffer();
+        const blob = new Blob([audioData], { type: 'audio/mp3' });
+        const url = URL.createObjectURL(blob);
+        
+        // Create and play audio
+        const audio = new Audio(url);
+        audio.onended = () => URL.revokeObjectURL(url);
+        await audio.play();
+        
+        console.log("Playing Azure TTS audio with Shimmer voice for", language);
+        return; // Success, no need for fallbacks
+      } catch (azureTtsError) {
+        console.error("Azure TTS failed:", azureTtsError);
+        // Fall back to Web Speech API if Azure fails
+        if ('speechSynthesis' in window) {
+          console.log("Falling back to Web Speech API for TTS");
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.lang = language;
+          window.speechSynthesis.speak(utterance);
+        }
+      }
+    } catch (error) {
+      console.error("Error playing TTS for translation:", error);
+      
+      // Final fallback to Web Speech API if all else fails
+      if ('speechSynthesis' in window) {
+        try {
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.lang = language;
+          window.speechSynthesis.speak(utterance);
+          console.log("Using Web Speech API as last resort fallback");
+        } catch (webSpeechError) {
+          console.error("Web Speech API failed:", webSpeechError);
+        }
+      }
+    }
+  };
+
   return (
     <div className="text-base flex flex-col h-screen bg-gray-100 text-gray-800 relative">
       <div className="p-5 text-lg font-semibold flex justify-between items-center">
@@ -1440,10 +1551,10 @@ function App() {
                 }
               }
             }}
-            className="ml-2 bg-blue-500 hover:bg-blue-600 text-white text-sm px-2 py-1 rounded-md"
-            title="手动触发音频播放"
+            className="ml-2 bg-white hover:bg-gray-100 text-gray-800 font-semibold py-1 px-2 border border-gray-400 rounded shadow text-xs"
+            title="Manually trigger audio playback"
           >
-            播放音频
+            Play Audio
           </button>
         </div>
         <div className="flex items-center" style={{ display: 'none' }}>
@@ -1552,7 +1663,7 @@ function App() {
       {sessionStatus === "CONNECTED" && (
         <div className="fixed top-3 left-1/2 transform -translate-x-1/2 bg-white rounded-full shadow-md px-3 py-1 z-10 flex items-center gap-2">
           <div className={`w-3 h-3 rounded-full ${isAudioPlaybackEnabled ? "bg-green-500" : "bg-red-500"}`}></div>
-          <span className="text-sm font-medium">音频{isAudioPlaybackEnabled ? "已启用" : "已禁用"}</span>
+          <span className="text-sm font-medium">Audio {isAudioPlaybackEnabled ? "Enabled" : "Disabled"}</span>
           {!isAudioPlaybackEnabled && (
             <button 
               className="text-xs bg-blue-500 text-white px-2 py-0.5 rounded hover:bg-blue-600"
