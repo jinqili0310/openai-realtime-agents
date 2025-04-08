@@ -248,11 +248,13 @@ export function useHandleServerEvent({
 
       case "conversation.item.input_audio_transcription.completed": {
         const itemId = serverEvent.item_id;
+        console.log("Received conversation.item.input_audio_transcription.completed event:", { itemId, event: serverEvent });
         const finalTranscript =
           !serverEvent.transcript || serverEvent.transcript === "\n"
             ? "[inaudible]"
             : serverEvent.transcript;
         if (itemId) {
+          console.log("Updating transcript message for itemId:", itemId);
           updateTranscriptMessage(itemId, finalTranscript, false);
           
           // 处理语言检测
@@ -308,8 +310,31 @@ export function useHandleServerEvent({
 
       case "response.output_item.done": {
         const itemId = serverEvent.item?.id;
+        console.log("Received response.output_item.done event:", { itemId, event: serverEvent });
+        
         if (itemId) {
+          // 获取消息内容
+          const content = serverEvent.item?.content?.[0]?.text || "";
+          console.log("Updating transcript message with content:", content);
+          
+          // 更新消息内容
+          if (externalUpdateTranscriptMessage) {
+            externalUpdateTranscriptMessage(itemId, content, false);
+          }
+          
+          // 更新消息状态为完成
+          console.log("Updating transcript item status to DONE for itemId:", itemId);
           updateTranscriptItemStatus(itemId, "DONE");
+          
+          // 如果是助手消息，发送到父窗口以显示翻译结果
+          if (serverEvent.item?.role === "assistant") {
+            console.log("Sending translation result to parent window");
+            window.parent.postMessage({
+              type: "translation",
+              role: "assistant",
+              content: content
+            }, "*");
+          }
         }
         break;
       }
@@ -330,6 +355,7 @@ export function useHandleServerEvent({
 
       case "conversation.item.ended": {
         const itemId = serverEvent.item_id;
+        console.log("Received conversation.item.ended event:", { itemId, event: serverEvent });
         
         // 验证item是否存在
         if (!itemId || !transcriptItems.some(item => item.itemId === itemId)) {
@@ -337,6 +363,7 @@ export function useHandleServerEvent({
           break;
         }
         
+        console.log("Updating transcript item status to DONE for itemId:", itemId);
         updateTranscriptItemStatus(itemId, "DONE");
         break;
       }

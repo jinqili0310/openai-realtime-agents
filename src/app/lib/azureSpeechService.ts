@@ -50,78 +50,32 @@ let accumulatedTranslation = ''; // 累积的所有翻译内容
 
 // 用于实时翻译的全局变量
 let currentTargetLanguage = 'en-US';
-let translationTimeout: any = null;
-let speechSynthesis: SpeechSynthesis | null = null;
 
 // 初始化语音合成
 function initSpeechSynthesis() {
-  if ('speechSynthesis' in window) {
-    speechSynthesis = window.speechSynthesis;
-    console.log('语音合成初始化成功');
-  } else {
-    console.error('浏览器不支持语音合成');
-  }
+  // 语音合成功能已移除
 }
 
 // 朗读翻译文本
 function speakTranslation(text: string, language: string) {
-  if (!speechSynthesis) {
-    initSpeechSynthesis();
-  }
-  
-  if (speechSynthesis) {
-    // 停止当前正在朗读的内容
-    speechSynthesis.cancel();
-    
-    // 创建新的语音合成实例
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = language;
-    utterance.rate = 1.0; // 语速
-    utterance.pitch = 1.0; // 音调
-    
-    // 在开始朗读前暂时停止语音识别
-    if (isListening) {
-      stopAzureSpeechRecognition();
-    }
-    
-    // 设置朗读结束事件
-    utterance.onend = () => {
-      console.log('朗读结束，重新启动语音识别');
-      // 朗读结束后重新启动语音识别
-      if (!isListening) {
-        startAzureSpeechRecognition(currentTargetLanguage);
-      }
-    };
-    
-    // 开始朗读
-    speechSynthesis.speak(utterance);
-  }
+  // 朗读功能已移除
 }
 
 // 实时翻译文本函数 - 修改为只在最终结果时翻译
 async function translateText(text: string, isFinal: boolean) {
   if (!text.trim()) return;
   
-  // 清除之前的翻译请求
-  if (translationTimeout) {
-    clearTimeout(translationTimeout);
-  }
-  
   // 只在最终结果时进行翻译
   if (isFinal) {
-    performTranslation(text, isFinal);
+    performTranslation(text);
   }
 }
 
 // 执行翻译请求
-async function performTranslation(text: string, isFinal: boolean) {
+const performTranslation = async (text: string) => {
+  if (!text.trim()) return;
+  
   try {
-    // 确定目标语言代码 (简单形式)
-    const targetLang = currentTargetLanguage.split('-')[0]; // 从 "en-US" 提取 "en"
-    
-    console.log(`尝试翻译文本到 ${targetLang}: ${text.substring(0, 30)}${text.length > 30 ? '...' : ''}`);
-    
-    // 使用本地API进行翻译
     const response = await fetch('/api/translate', {
       method: 'POST',
       headers: {
@@ -129,43 +83,32 @@ async function performTranslation(text: string, isFinal: boolean) {
       },
       body: JSON.stringify({
         text: text,
-        targetLanguage: targetLang
+        targetLanguage: 'en', // 默认翻译成英文
+        sourceLanguage: 'auto' // 自动检测源语言
       }),
     });
+
+    if (!response.ok) {
+      throw new Error(`Translation failed: ${response.statusText}`);
+    }
+
+    const result = await response.json();
     
-    if (response.ok) {
-      const data = await response.json();
-      
-      // 更新当前翻译内容
-      currentTranslation = data.translatedText;
-      
-      // 如果是最终结果，更新累积的翻译内容
-      if (isFinal) {
-        accumulatedTranslation = currentTranslation;
-      }
-      
-      // 调用翻译回调，只包含最终翻译内容
-      onTranslationCallback({
-        originalText: text,
-        translatedText: currentTranslation,
-        fromLanguage: data.detectedLanguage || 'zh-CN',
-        toLanguage: targetLang,
-        isFinal: isFinal
-      });
-      
-      // 如果是最终结果，朗读翻译内容
-      if (isFinal) {
-        speakTranslation(currentTranslation.trim(), currentTargetLanguage);
-      }
-      
-      console.log(`翻译成功: ${currentTranslation.trim().substring(0, 30)}${currentTranslation.trim().length > 30 ? '...' : ''}`);
-    } else {
-      console.error('翻译请求失败:', await response.text());
+    // 发送翻译结果到对话框
+    if (typeof window !== 'undefined' && window.parent) {
+      window.parent.postMessage({
+        type: 'ADD_MESSAGE',
+        message: {
+          role: 'assistant',
+          content: result.translatedText,
+          type: 'translation'
+        }
+      }, '*');
     }
   } catch (error) {
-    console.error('翻译过程中出错:', error);
+    console.error('Translation error:', error);
   }
-}
+};
 
 // 初始化Azure服务
 export async function initAzureSpeechService(onTranscription: TranscriptionCallback, onTranslation: TranslationCallback): Promise<boolean> {
@@ -606,13 +549,10 @@ export function startAzureSpeechRecognition(targetLanguage: string = 'en-US', is
     console.log('开始新的录音，清空累积内容');
     currentTranscript = '';
     accumulatedTranscript = '';
-    currentTranslation = '';
-    accumulatedTranslation = '';
   } else {
     // 如果不是新的录音，只清空当前内容
     console.log('继续当前录音，保留累积内容');
     currentTranscript = '';
-    currentTranslation = '';
   }
   
   try {

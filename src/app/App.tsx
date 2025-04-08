@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { v4 as uuidv4 } from "uuid";
 
@@ -71,6 +71,21 @@ if (typeof window !== 'undefined') {
   window.lastTranscriptId = null;
   window.lastTranslationId = null;
 }
+
+// 添加类型定义
+type ServerEvent = {
+  type: string;
+  itemId?: string;
+  status?: string;
+  item?: {
+    id: string;
+    role: string;
+    content?: Array<{
+      type: string;
+      text: string;
+    }>;
+  };
+};
 
 function App() {
   const searchParams = useSearchParams();
@@ -191,21 +206,52 @@ function App() {
     }
   };
 
-  const handleServerEventRef = useHandleServerEvent({
-    setSessionStatus,
-    selectedAgentName,
-    selectedAgentConfigSet,
-    sendClientEvent,
-    setSelectedAgentName,
-    setMainLang,
-    setLastTargetLang,
-    isFirstMessage,
-    setIsFirstMessage,
-    mainLang,
-    lastTargetLang,
-    updateTranscriptMessage,
-    updateTranscriptItemStatus: (itemId: string, status: any) => updateTranscriptItemStatus(itemId, status === "PENDING" || status === "ERROR" ? "IN_PROGRESS" : status)
-  });
+  const handleServerEventRef = useCallback((event: ServerEvent) => {
+    console.log("Received server event:", event);
+    
+    if (event.type === "status_update") {
+      const { itemId, status } = event;
+      console.log("Processing status update:", { itemId, status });
+      
+      if (status === "DONE") {
+        console.log("Status is DONE, looking for message with itemId:", itemId);
+        const message = transcriptItems.find(item => item.itemId === itemId);
+        console.log("Found message:", message);
+        
+        if (message && message.role === "assistant") {
+          console.log("Processing assistant message:", message);
+          const content = event.item?.content?.[0]?.text || "";
+          console.log("Message content:", content);
+          
+          // 显示翻译结果
+          addTranscriptMessage(itemId || "", "assistant", content);
+          
+          // 如果启用了音频播放，朗读翻译结果
+          if (isAudioPlaybackEnabled) {
+            const utterance = new SpeechSynthesisUtterance(content);
+            utterance.lang = lastTargetLang === "zh" ? "zh-CN" : "en-US";
+            window.speechSynthesis.speak(utterance);
+          }
+        }
+      }
+    } else if (event.type === "response.output_item.done") {
+      // 处理翻译完成事件
+      const itemId = event.item?.id;
+      const content = event.item?.content?.[0]?.text || "";
+      
+      if (itemId && content) {
+        console.log("Processing translation result:", { itemId, content });
+        addTranscriptMessage(itemId, "assistant", content);
+        
+        // 如果启用了音频播放，朗读翻译结果
+        if (isAudioPlaybackEnabled) {
+          const utterance = new SpeechSynthesisUtterance(content);
+          utterance.lang = lastTargetLang === "zh" ? "zh-CN" : "en-US";
+          window.speechSynthesis.speak(utterance);
+        }
+      }
+    }
+  }, [transcriptItems, isAudioPlaybackEnabled, lastTargetLang, addTranscriptMessage]);
 
   useEffect(() => {
     let finalAgentConfig = searchParams.get("agentConfig");
@@ -482,7 +528,7 @@ function App() {
       });
       
       dc.addEventListener("message", (e: MessageEvent) => {
-        handleServerEventRef.current(JSON.parse(e.data));
+        handleServerEventRef(JSON.parse(e.data));
       });
 
       setDataChannel(dc);
@@ -822,36 +868,20 @@ function App() {
       
       // 获取实时消息ID
       const transcriptMessageId = realtimeTranscriptMessageIdRef.current;
-      let translationMessageId = realtimeTranslationMessageIdRef.current;
       
       // 如果有转写结果，发送给OpenAI
       if (realtimeTranscript && realtimeTranscript.trim()) {
         console.log("发送最终转写结果给OpenAI:", realtimeTranscript);
         
         try {
-          // 保持实时转写和翻译消息不变，不添加"处理中"状态
+          // 保持实时转写消息不变，不添加"处理中"状态
           if (transcriptMessageId) {
             // 将状态设为IN_PROGRESS但不改变内容
             updateTranscriptItemStatus(transcriptMessageId, "IN_PROGRESS");
           }
           
-          // 只有在有翻译消息ID且有内容时才处理
-          if (translationMessageId && realtimeTranslation && realtimeTranslation.trim()) {
-            // 将状态设为IN_PROGRESS但不改变内容
-            updateTranscriptItemStatus(translationMessageId, "IN_PROGRESS");
-          } else if (translationMessageId) {
-            // 如果有ID但没有内容，隐藏消息
-            updateTranscriptMessage(translationMessageId, "", false);
-            updateTranscriptItemStatus(translationMessageId, "DONE");
-            toggleTranscriptItemExpand(translationMessageId);
-            realtimeTranslationMessageIdRef.current = "";
-            translationMessageId = ""; // 确保不会发送给后续处理
-          }
-          
           // 使用自定义函数发送用户消息，不创建新消息而是复用实时消息
-          sendCustomUserMessage(realtimeTranscript, transcriptMessageId, translationMessageId);
-          
-          // 不重置实时消息ID，因为后续会更新这些消息
+          sendCustomUserMessage(realtimeTranscript, transcriptMessageId);
           
           return;
         } catch (error) {
@@ -864,17 +894,8 @@ function App() {
         if (transcriptMessageId) {
           updateTranscriptMessage(transcriptMessageId, "", false);
           updateTranscriptItemStatus(transcriptMessageId, "DONE");
-          // 标记为隐藏 - 使用TranscriptContext中的方法而不是直接修改状态
           toggleTranscriptItemExpand(transcriptMessageId);
           realtimeTranscriptMessageIdRef.current = "";
-        }
-        
-        if (translationMessageId) {
-          updateTranscriptMessage(translationMessageId, "", false);
-          updateTranscriptItemStatus(translationMessageId, "DONE");
-          // 标记为隐藏 - 使用TranscriptContext中的方法而不是直接修改状态
-          toggleTranscriptItemExpand(translationMessageId);
-          realtimeTranslationMessageIdRef.current = "";
         }
       }
     }
@@ -893,7 +914,7 @@ function App() {
   };
 
   // 修改自定义发送用户消息函数
-  const sendCustomUserMessage = (text: string, transcriptId: string, translationId: string) => {
+  const sendCustomUserMessage = (text: string, transcriptId: string) => {
     // 如果没有有效的转写消息ID，创建一个新的消息
     const messageId = transcriptId || uuidv4().slice(0, 32);
     
@@ -905,7 +926,6 @@ function App() {
     // 保存消息ID，以便在服务器响应中使用
     if (typeof window !== 'undefined') {
       window.lastTranscriptId = transcriptId;
-      window.lastTranslationId = translationId;
     }
 
     sendClientEvent(
@@ -1264,16 +1284,15 @@ function App() {
           setRealtimeTranslation(result.translatedText);
           setRealtimeToLang(result.toLanguage);
           
-          // 对于有效翻译内容，创建或更新翻译消息
-          if (result.translatedText && result.translatedText.trim()) {
-            if (realtimeTranslationMessageIdRef.current) {
-              // 更新已有消息
-              updateTranscriptMessage(realtimeTranslationMessageIdRef.current, result.translatedText, false);
-            } else {
-              // 创建新消息
-              const newId = uuidv4().slice(0, 32);
-              realtimeTranslationMessageIdRef.current = newId;
-              addTranscriptMessage(newId, "assistant", result.translatedText);
+          // 根据检测到的语言自动设置主语言和目标语言
+          if (result.fromLanguage) {
+            const detectedLang = result.fromLanguage.split('-')[0]; // 从 "zh-CN" 提取 "zh"
+            if (detectedLang === 'zh') {
+              setMainLang('zh'); // 如果检测到中文，设置主语言为中文
+              setLastTargetLang('en'); // 设置目标语言为英文
+            } else if (detectedLang === 'en') {
+              setMainLang('en'); // 如果检测到英文，设置主语言为英文
+              setLastTargetLang('zh'); // 设置目标语言为中文
             }
           }
         }
