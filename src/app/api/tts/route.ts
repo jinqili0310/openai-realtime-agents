@@ -3,17 +3,25 @@ import { textToSpeech } from '@/app/lib/textToSpeech';
 
 // Map language codes to the appropriate Shimmer Turbo voice
 function getShimmerVoiceForLanguage(language: string): string {
-  // Extract the base language from the locale
-  const baseLanguage = (language || 'en').split('-')[0].toLowerCase();
+  // Handle empty language
+  if (!language) {
+    console.log('No language provided, defaulting to English voice');
+    return 'en-US-JennyNeural';
+  }
+  
+  // Extract the base language from the locale and normalize to lowercase
+  const baseLanguage = language.split('-')[0].toLowerCase();
+  
+  console.log(`Getting voice for language: ${language}, base language: ${baseLanguage}`);
   
   // Map to appropriate neural voices (using verified working voices)
   switch (baseLanguage) {
     case 'en':
       return 'en-US-JennyNeural'; // Use Jenny instead of Shimmer which might not be available
-    case 'es':
-      return 'es-ES-ElviraNeural'; // Standard neural voice for Spanish
     case 'zh':
       return 'zh-CN-XiaoxiaoNeural'; // Standard neural voice for Chinese
+    case 'es':
+      return 'es-ES-ElviraNeural'; // Standard neural voice for Spanish
     case 'fr':
       return 'fr-FR-DeniseNeural'; // Standard neural voice for French
     case 'de':
@@ -31,6 +39,7 @@ function getShimmerVoiceForLanguage(language: string): string {
     case 'ar':
       return 'ar-SA-ZariyahNeural'; // Neural voice for Arabic
     default:
+      console.log(`Unknown language: ${baseLanguage}, defaulting to English voice`);
       return 'en-US-JennyNeural'; // Default to English Jenny
   }
 }
@@ -72,6 +81,14 @@ export async function POST(req: NextRequest) {
     
     try {
       // Call the TTS function
+      console.log(`Calling textToSpeech with parameters:`, {
+        textLength: text.length,
+        voice: ttsVoice,
+        rate: rate || 1,
+        pitch: pitch || 0,
+        language: language || 'en-US'
+      });
+      
       const audioData = await textToSpeech({
         text,
         voice: ttsVoice,
@@ -79,6 +96,14 @@ export async function POST(req: NextRequest) {
         pitch,
         language: language || 'en-US',
       });
+
+      if (!audioData || audioData.byteLength === 0) {
+        console.error('TTS API received empty audio data');
+        return NextResponse.json(
+          { error: 'Empty audio data received from TTS service' },
+          { status: 500 }
+        );
+      }
 
       console.log(`TTS API successfully generated audio: ${audioData.byteLength} bytes`);
       

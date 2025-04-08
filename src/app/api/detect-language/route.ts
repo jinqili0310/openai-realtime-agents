@@ -1,5 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+// Map language names to codes
+const languageNameToCode: Record<string, string> = {
+  "Chinese": "zh",
+  "English": "en",
+  "Spanish": "es",
+  "French": "fr",
+  "German": "de",
+  "Japanese": "ja",
+  "Russian": "ru",
+  "Korean": "ko",
+  "Arabic": "ar",
+  "Hindi": "hi",
+  "Portuguese": "pt",
+  "Italian": "it",
+  "Dutch": "nl",
+  "Greek": "el",
+  "Thai": "th"
+};
+
 // 语言检测API
 export async function POST(req: NextRequest) {
   try {
@@ -59,7 +78,16 @@ export async function POST(req: NextRequest) {
     const data = await response.json();
     const languageName = data.choices?.[0]?.message?.content?.trim() || 'Unknown';
     
-    return NextResponse.json({ languageCode: languageName });
+    // Convert language name to code
+    const languageCode = languageNameToCode[languageName] || 
+      (languageName.toLowerCase() === 'unknown' ? 'unknown' : languageName);
+    
+    console.log(`Language detected: ${languageName} -> code: ${languageCode}`);
+    
+    return NextResponse.json({ 
+      languageCode: languageCode,
+      languageName: languageName
+    });
   } catch (error) {
     console.error('Error in language detection API:', error);
     return NextResponse.json(

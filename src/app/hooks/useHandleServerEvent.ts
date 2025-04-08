@@ -260,7 +260,7 @@ export function useHandleServerEvent({
           // 处理语言检测
           if (finalTranscript !== "[inaudible]" && setMainLang && setLastTargetLang) {
             detectLanguage(finalTranscript).then(detectedLang => {
-              if (detectedLang !== "Unknown") {
+              if (detectedLang !== "unknown") {
                 console.log(`Processing language detection: ${detectedLang}, First message: ${isFirstMessage}`);
                 
                 // 使用新的语言状态更新函数
@@ -402,8 +402,9 @@ const detectLanguageByGPT = async (text: string): Promise<string> => {
     }
     
     const data = await response.json();
-    const detectedLang = data.languageCode || 'Unknown';
-    console.log(`GPT detected language: ${detectedLang} for text: ${text.substring(0, 20)}...`);
+    // Use languageCode directly which is now a normalized code (en, zh, es, etc.)
+    const detectedLang = data.languageCode || 'unknown';
+    console.log(`Language detection API result: ${detectedLang} (${data.languageName || 'Unknown'}) for text: ${text.substring(0, 20)}...`);
     return detectedLang;
   } catch (error) {
     console.error('Error detecting language with GPT:', error);
@@ -414,45 +415,45 @@ const detectLanguageByGPT = async (text: string): Promise<string> => {
 // 基本的语言检测，作为备选方案
 const detectBasicLanguage = (text: string): string => {
   try {
-    // 基本检测规则 - 返回标准语言名称
+    // 基本检测规则 - 返回语言代码而不是名称
     if (/[a-zA-Z]/.test(text)) {
       if (/[ñáéíóúü]/.test(text)) {
-        return "Spanish"; 
+        return "es"; 
       } else {
-        return "English";
+        return "en";
       }
     } else if (/[\u4e00-\u9fa5]/.test(text)) {
-      return "Chinese";
+      return "zh";
     } else if (/[\u3040-\u30ff]/.test(text)) {
-      return "Japanese";
+      return "ja";
     } else if (/[\u0400-\u04FF]/.test(text)) {
-      return "Russian";
+      return "ru";
     } else if (/[\u0600-\u06FF]/.test(text)) {
-      return "Arabic";
+      return "ar";
     } else if (/[\u0900-\u097F]/.test(text)) {
-      return "Hindi";
+      return "hi";
     } else if (/[\u1100-\u11FF\uAC00-\uD7AF]/.test(text)) {
-      return "Korean";
+      return "ko";
     } else if (/[\u0E00-\u0E7F]/.test(text)) {
-      return "Thai";
+      return "th";
     } else if (/[\u0370-\u03FF]/.test(text)) {
-      return "Greek";
+      return "el";
     }
     
-    return "Unknown";
+    return "unknown";
   } catch (error) {
     console.error("Error in basic language detection:", error);
-    return "Unknown";
+    return "unknown";
   }
 };
 
 // Helper function to detect language (simplified version)
-const detectLanguage = async (text: string): Promise<string> => {
+export const detectLanguage = async (text: string): Promise<string> => {
   return detectLanguageByGPT(text);
 };
 
 // 添加延迟以确保状态更新
-const updateLanguageState = (
+export const updateLanguageState = (
   detected: string, 
   isFirst: boolean | undefined, 
   setML?: (lang: string) => void,
@@ -463,36 +464,75 @@ const updateLanguageState = (
 ) => {
   if (!setML || !setTL) return;
   
+  // Get normalized language code
+  const normalizeLanguage = (lang: string): string => {
+    const langMap: Record<string, string> = {
+      "Chinese": "zh",
+      "English": "en",
+      "Spanish": "es",
+      "French": "fr",
+      "German": "de",
+      "Japanese": "ja",
+      "Russian": "ru",
+      "Korean": "ko",
+      "Arabic": "ar",
+      "Hindi": "hi",
+      "Portuguese": "pt",
+      "Italian": "it",
+      "Dutch": "nl",
+      "Greek": "el",
+      "Thai": "th"
+    };
+    return langMap[lang] || lang.toLowerCase().split('-')[0];
+  };
+  
+  const normalizedDetected = normalizeLanguage(detected);
+  const normalizedCurrML = currML ? normalizeLanguage(currML) : "zh"; // Default ML is Chinese
+  const normalizedCurrTL = currTL ? normalizeLanguage(currTL) : "en"; // Default TL is English
+  
   if (isFirst && setIsFirst) {
-    // 首次消息 - 设置 ML 和 TL
-    console.log(`首次语言检测: ${detected}, 设置为ML`);
+    // First message - set main language based on detection, default target to English or Chinese
+    console.log(`First language detection: ${detected}, setting as main language`);
     
-    if (detected === "English") {
-      setML("English");
-      setTL("Spanish");
+    // Set the detected language as main language
+    setML(normalizedDetected);
+    
+    // Set target language to English if the detected language is not English,
+    // otherwise set it to Chinese (defaults)
+    if (normalizedDetected !== "en") {
+      setTL("en");
     } else {
-      setML(detected);
-      setTL("English");
+      setTL("zh");
     }
     
-    // 延迟标记首次消息处理完成，确保状态更新
+    // Mark first message as processed
     setTimeout(() => {
       setIsFirst(false);
     }, 100);
     
-  } else if (!isFirst && currML) {
-    // 后续消息 - 处理语言切换
-    if (detected !== currML) {
-      console.log(`检测到新语言: ${detected} (不是ML: ${currML}), 更新TL`);
-      
-      // 通过延迟确保状态更新
+  } else if (!isFirst) {
+    // Subsequent messages - handle language switching
+    console.log(`Detected language: ${detected} (${normalizedDetected}), current ML: ${currML} (${normalizedCurrML}), current TL: ${currTL} (${normalizedCurrTL})`);
+    
+    // If detected language is neither main nor target, set it as target
+    if (normalizedDetected !== normalizedCurrML && normalizedDetected !== normalizedCurrTL) {
+      console.log(`Detected new language: ${detected}, setting as target language`);
       setTimeout(() => {
-        setTL(detected);
+        setTL(normalizedDetected);
       }, 100);
-      
-    } else {
-      // 输入语言与ML相同，应该翻译到TL
-      console.log(`检测到ML (${currML}), 将翻译到TL (${currTL})`);
+    } 
+    // If detected language matches target language, swap main and target languages
+    else if (normalizedDetected === normalizedCurrTL) {
+      console.log(`Detected target language: ${detected}, swapping languages`);
+      setTimeout(() => {
+        const temp = normalizedCurrML;
+        setML(normalizedCurrTL);
+        setTL(temp);
+      }, 100);
+    }
+    // If detected language matches main language, no change needed
+    else {
+      console.log(`Detected main language: ${detected}, no change needed`);
     }
   }
 };

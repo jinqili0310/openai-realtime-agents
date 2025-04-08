@@ -40,13 +40,24 @@ export async function textToSpeech(options: TTSOptions): Promise<ArrayBuffer> {
     throw new Error('Azure TTS credentials not configured. Please check your environment variables.');
   }
 
+  // Determine if text contains Chinese characters
+  const containsChinese = /[\u4e00-\u9fff]/.test(text);
+  
+  // Voice selection logic - override provided voice if text contains Chinese characters
+  let finalVoice = voice;
+  if (containsChinese && !voice.startsWith('zh-')) {
+    finalVoice = 'zh-CN-XiaoxiaoNeural';
+    console.log(`Text contains Chinese characters, overriding voice to: ${finalVoice}`);
+  }
+
   // Determine the SSML language (use the voice language code by default)
-  const ssmlLang = voice.split('-').slice(0, 2).join('-') || language;
+  const ssmlLang = finalVoice.split('-').slice(0, 2).join('-') || language;
+  console.log(`Using SSML language: ${ssmlLang}`);
 
   // Format the SSML for Azure TTS
   const ssml = `
     <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="${ssmlLang}">
-      <voice name="${voice}">
+      <voice name="${finalVoice}">
         <prosody rate="${rate}" pitch="${pitch}%">
           ${text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')}
         </prosody>
@@ -55,7 +66,7 @@ export async function textToSpeech(options: TTSOptions): Promise<ArrayBuffer> {
   `;
 
   try {
-    console.log(`Calling Azure TTS API at: ${endpoint} with voice: ${voice}`);
+    console.log(`Calling Azure TTS API at: ${endpoint} with voice: ${finalVoice}`);
     // Call Azure TTS API
     const response = await fetch(endpoint, {
       method: 'POST',
@@ -72,15 +83,21 @@ export async function textToSpeech(options: TTSOptions): Promise<ArrayBuffer> {
       const errorText = await response.text();
       console.error(`Azure TTS API error: ${response.status}`, {
         error: errorText,
-        usedVoice: voice,
-        ssmlLanguage: ssmlLang
+        usedVoice: finalVoice,
+        ssmlLanguage: ssmlLang,
+        textSample: text.substring(0, 100)
       });
       throw new Error(`Azure TTS API returned error: ${response.status} - ${errorText}`);
     }
 
-    console.log('Azure TTS API call successful, returning audio data');
-    // Return the audio data as ArrayBuffer
-    return await response.arrayBuffer();
+    // Verify we got data
+    const audioData = await response.arrayBuffer();
+    if (!audioData || audioData.byteLength === 0) {
+      throw new Error('Azure TTS API returned empty audio data');
+    }
+    
+    console.log(`Azure TTS API call successful, returning ${audioData.byteLength} bytes of audio data`);
+    return audioData;
   } catch (error) {
     console.error('Error in Azure TTS service:', error);
     throw error;

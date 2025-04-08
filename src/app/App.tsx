@@ -29,6 +29,7 @@ import {
   disposeAzureSpeechService,
   registerAzureCallbacks
 } from "./lib/azureSpeechService";
+import { detectLanguage, updateLanguageState } from "./hooks/useHandleServerEvent";
 
 // Agent configs
 import { allAgentSets, defaultAgentSetKey } from "@/app/agentConfigs";
@@ -55,6 +56,17 @@ const languageCodeToName: Record<string, string> = {
 
 // 获取友好的语言名称
 const getFriendlyLanguageName = (code: string): string => {
+  // Handle when a full language name is passed instead of code
+  if (code.length > 2) {
+    // Check if code is already a language name 
+    const isFullName = Object.values(languageCodeToName).includes(code);
+    if (isFullName) return code;
+    
+    // Handle locale formats like 'en-US'
+    const baseLang = code.split('-')[0].toLowerCase();
+    return languageCodeToName[baseLang] || code;
+  }
+  
   return languageCodeToName[code] || code;
 };
 
@@ -77,6 +89,9 @@ type ServerEvent = {
   type: string;
   itemId?: string;
   status?: string;
+  item_id?: string;
+  transcript?: string;
+  delta?: string;
   item?: {
     id: string;
     role: string;
@@ -84,6 +99,17 @@ type ServerEvent = {
       type: string;
       text: string;
     }>;
+  };
+  response?: {
+    output?: Array<{
+      type: string;
+      name?: string;
+      call_id?: string;
+      arguments?: any;
+    }>;
+  };
+  session?: {
+    id: string;
   };
 };
 
@@ -228,7 +254,15 @@ function App() {
           
           // 如果启用了音频播放，朗读翻译结果
           if (isAudioPlaybackEnabled) {
-            playTranslationTTS(content, lastTargetLang === "zh" ? "zh-CN" : "en-US");
+            // When English is detected, we should translate to Chinese (mainLang)
+            // When Chinese is detected, we should translate to English (lastTargetLang)
+            // Determine which language to use for TTS based on input language
+            const messageLanguage = message.role === "assistant" ? 
+              (realtimeFromLang === "en" || realtimeFromLang.startsWith("en-") ? "zh" : "en") : 
+              lastTargetLang;
+              
+            console.log(`Playing TTS with language: ${messageLanguage}, detected from: ${realtimeFromLang}`);
+            playTranslationTTS(content, messageLanguage);
           }
         }
       }
@@ -247,7 +281,15 @@ function App() {
         
         // 如果启用了音频播放，朗读翻译结果
         if (isAudioPlaybackEnabled) {
-          playTranslationTTS(content, lastTargetLang === "zh" ? "zh-CN" : "en-US");
+          // When English is detected, we should translate to Chinese (mainLang)
+          // When Chinese is detected, we should translate to English (lastTargetLang)
+          // Determine which language to use for TTS based on input language
+          const messageLanguage = role === "assistant" ? 
+            (realtimeFromLang === "en" || realtimeFromLang.startsWith("en-") ? "zh" : "en") : 
+            lastTargetLang;
+            
+          console.log(`Playing TTS with language: ${messageLanguage}, detected from: ${realtimeFromLang}`);
+          playTranslationTTS(content, messageLanguage);
         }
       }
     } else if (event.type === "conversation.item.updated") {
@@ -269,11 +311,48 @@ function App() {
         
         // Play TTS for the updated content
         if (isAudioPlaybackEnabled) {
-          playTranslationTTS(content, lastTargetLang === "zh" ? "zh-CN" : "en-US");
+          // When English is detected, we should translate to Chinese (mainLang)
+          // When Chinese is detected, we should translate to English (lastTargetLang)
+          // Determine which language to use for TTS based on input language
+          const messageLanguage = role === "assistant" ? 
+            (realtimeFromLang === "en" || realtimeFromLang.startsWith("en-") ? "zh" : "en") : 
+            lastTargetLang;
+            
+          console.log(`Playing TTS with language: ${messageLanguage}, detected from: ${realtimeFromLang}`);
+          playTranslationTTS(content, messageLanguage);
+        }
+      }
+    } else if (event.type === "conversation.item.input_audio_transcription.completed") {
+      // Process transcription events with language detection
+      const itemId = event.item_id;
+      const transcript = event.transcript || "";
+      
+      if (itemId && transcript && transcript.trim() !== "" && transcript !== "\n") {
+        console.log(`Processing transcription: "${transcript.substring(0, 30)}..."`);
+        
+        // Detect the language of the transcript
+        if (transcript !== "[inaudible]") {
+          detectLanguage(transcript).then(detectedLang => {
+            if (detectedLang !== "unknown") {
+              console.log(`Language detected in transcription: ${detectedLang}`);
+              
+              // Import the update function and use it
+              updateLanguageState(
+                detectedLang,
+                isFirstMessage,
+                setMainLang,
+                setLastTargetLang,
+                setIsFirstMessage,
+                mainLang,
+                lastTargetLang
+              );
+            }
+          });
         }
       }
     }
-  }, [transcriptItems, isAudioPlaybackEnabled, lastTargetLang, addTranscriptMessage, updateTranscriptMessage, updateTranscriptItemStatus]);
+  }, [transcriptItems, isAudioPlaybackEnabled, lastTargetLang, addTranscriptMessage, updateTranscriptMessage, updateTranscriptItemStatus, 
+      mainLang, setMainLang, setLastTargetLang, isFirstMessage, setIsFirstMessage]);
 
   useEffect(() => {
     let finalAgentConfig = searchParams.get("agentConfig");
@@ -338,7 +417,7 @@ function App() {
               content: [
                 { 
                   type: "text", 
-                  text: "Welcome to HIT Translator! Feel free to say something — we'll detect your language automatically!" 
+                  text: "Welcome to the Translator! I can translate in both directions: Chinese ↔ English. Start speaking in either language, and I'll automatically detect and translate for you." 
                 }
               ],
             },
@@ -350,7 +429,7 @@ function App() {
         addTranscriptMessage(
           welcomeId, 
           "assistant", 
-          "Welcome to HIT Translator! Feel free to say something — we'll detect your language automatically!"
+          "Welcome to the Translator! I can translate in both directions: Chinese ↔ English. Start speaking in either language, and I'll automatically detect and translate for you."
         );
         
         // 更新消息状态为已完成
@@ -814,16 +893,28 @@ function App() {
     if (azureInitialized && !azureListening) {
       console.log("开始Azure实时转写和翻译...");
       try {
-        let targetLangCode = 'en-US';
+        // 使用更通用的语言代码转换函数
+        const getLocaleFromCode = (code: string): string => {
+          const localeMap: Record<string, string> = {
+            'en': 'en-US',
+            'zh': 'zh-CN',
+            'es': 'es-ES',
+            'fr': 'fr-FR',
+            'de': 'de-DE',
+            'ja': 'ja-JP',
+            'ru': 'ru-RU',
+            'ko': 'ko-KR',
+            'ar': 'ar-SA',
+            'pt': 'pt-BR',
+            'it': 'it-IT'
+          };
+          
+          if (code.includes('-')) return code;
+          return localeMap[code.toLowerCase()] || 'en-US';
+        };
         
-        // 简单的映射
-        if (lastTargetLang === 'zh') targetLangCode = 'zh-CN';
-        else if (lastTargetLang === 'en') targetLangCode = 'en-US';
-        else if (lastTargetLang === 'es') targetLangCode = 'es-ES';
-        else if (lastTargetLang === 'fr') targetLangCode = 'fr-FR';
-        else if (lastTargetLang === 'de') targetLangCode = 'de-DE';
-        else if (lastTargetLang === 'ja') targetLangCode = 'ja-JP';
-        else if (lastTargetLang === 'ru') targetLangCode = 'ru-RU';
+        const targetLangCode = getLocaleFromCode(lastTargetLang);
+        console.log(`Starting Azure speech recognition with target language: ${targetLangCode} (from ${lastTargetLang})`);
         
         // 强制标记老消息为完成
         if (realtimeTranscriptMessageIdRef.current) {
@@ -1053,7 +1144,7 @@ function App() {
             addTranscriptMessage(
               uuidv4().slice(0, 32),
               "assistant",
-              `系统已准备好进行 ${mainLang} ↔ ${lastTargetLang} 翻译`
+              `System is ready to translate between ${getFriendlyLanguageName(mainLang)} and ${getFriendlyLanguageName(lastTargetLang)}. Speak in either language.`
             );
           }, 3000); // 延长等待时间到3秒
         }, 500);
@@ -1321,19 +1412,54 @@ function App() {
           
           // Play TTS for the translation but don't create a duplicate message
           if (isAudioPlaybackEnabled) {
-            playTranslationTTS(result.translatedText, result.toLanguage);
+            // When English is detected, we should use Chinese voice for TTS
+            // When Chinese is detected, we should use English voice for TTS
+            const detectedLang = result.fromLanguage.split('-')[0].toLowerCase();
+            const ttsLanguage = detectedLang === 'en' ? 'zh' : 'en';
+            
+            console.log(`Playing TTS with language: ${ttsLanguage} based on detected: ${detectedLang}`);
+            playTranslationTTS(result.translatedText, ttsLanguage);
           }
-        }
-        
-        // Automatically set language preferences based on detected languages
-        if (result.fromLanguage) {
-          const detectedLang = result.fromLanguage.split('-')[0]; // 从 "zh-CN" 提取 "zh"
-          if (detectedLang === 'zh') {
-            setMainLang('zh'); // 如果检测到中文，设置主语言为中文
-            setLastTargetLang('en'); // 设置目标语言为英文
-          } else if (detectedLang === 'en') {
-            setMainLang('en'); // 如果检测到英文，设置主语言为英文
-            setLastTargetLang('zh'); // 设置目标语言为中文
+          
+          // Detect the language and potentially swap languages
+          if (result.fromLanguage) {
+            const detectedLang = result.fromLanguage.split('-')[0].toLowerCase(); // 从 "zh-CN" 提取 "zh"
+            let shouldUpdateAzure = false;
+            
+            // Only update languages if they're different from current
+            if (detectedLang === 'zh' && mainLang !== 'zh') {
+              console.log("检测到中文输入，将中文设为主语言");
+              setMainLang('zh');
+              setLastTargetLang('en');
+              shouldUpdateAzure = true;
+            } else if (detectedLang === 'en' && mainLang !== 'en') {
+              console.log("检测到英文输入，将英文设为主语言");
+              setMainLang('en');
+              setLastTargetLang('zh');
+              shouldUpdateAzure = true;
+            }
+            
+            // If we changed languages, update Azure service
+            if (shouldUpdateAzure) {
+              // Call updateTargetLanguage with the proper locale
+              setTimeout(() => {
+                const getLocaleFromCode = (code: string): string => {
+                  const localeMap: Record<string, string> = {
+                    'en': 'en-US', 'zh': 'zh-CN', 'es': 'es-ES',
+                    'fr': 'fr-FR', 'de': 'de-DE', 'ja': 'ja-JP',
+                    'ru': 'ru-RU', 'ko': 'ko-KR', 'ar': 'ar-SA',
+                    'pt': 'pt-BR', 'it': 'it-IT'
+                  };
+                  if (code.includes('-')) return code;
+                  return localeMap[code.toLowerCase()] || 'en-US';
+                };
+                
+                // Use the target language (which is now updated)
+                const newTargetLocale = getLocaleFromCode(detectedLang === 'zh' ? 'en' : 'zh');
+                console.log(`更新 Azure 目标语言为: ${newTargetLocale}`);
+                updateTargetLanguage(newTargetLocale);
+              }, 500); // Add small delay to ensure state is updated
+            }
           }
         }
       };
@@ -1421,16 +1547,30 @@ function App() {
   useEffect(() => {
     if (azureInitialized && lastTargetLang) {
       // 将语言代码转换为Azure格式
-      let targetLangCode = 'en-US'; // 默认英语
+      const getLocaleFromCode = (code: string): string => {
+        const localeMap: Record<string, string> = {
+          'en': 'en-US',
+          'zh': 'zh-CN',
+          'es': 'es-ES',
+          'fr': 'fr-FR',
+          'de': 'de-DE',
+          'ja': 'ja-JP',
+          'ru': 'ru-RU',
+          'ko': 'ko-KR',
+          'ar': 'ar-SA',
+          'pt': 'pt-BR',
+          'it': 'it-IT'
+        };
+        
+        // If it's already a locale format (xx-XX), use it as is
+        if (code.includes('-')) return code;
+        
+        // Otherwise, look up the mapping or use en-US as fallback
+        return localeMap[code.toLowerCase()] || 'en-US';
+      };
       
-      // 简单的映射
-      if (lastTargetLang === 'zh') targetLangCode = 'zh-CN';
-      else if (lastTargetLang === 'en') targetLangCode = 'en-US';
-      else if (lastTargetLang === 'es') targetLangCode = 'es-ES';
-      else if (lastTargetLang === 'fr') targetLangCode = 'fr-FR';
-      else if (lastTargetLang === 'de') targetLangCode = 'de-DE';
-      else if (lastTargetLang === 'ja') targetLangCode = 'ja-JP';
-      else if (lastTargetLang === 'ru') targetLangCode = 'ru-RU';
+      const targetLangCode = getLocaleFromCode(lastTargetLang);
+      console.log(`Updating Azure target language to: ${targetLangCode} (from ${lastTargetLang})`);
       
       updateTargetLanguage(targetLangCode);
     }
@@ -1446,11 +1586,47 @@ function App() {
         return;
       }
       
-      console.log(`Using Azure TTS with Shimmer voice for: "${text.substring(0, 30)}..."`);
+      // Convert simple language code to locale format required by TTS
+      const getLocaleFromCode = (code: string): string => {
+        // Normalize the language code to lowercase
+        const normalizedCode = code.toLowerCase();
+        
+        const localeMap: Record<string, string> = {
+          'en': 'en-US',
+          'zh': 'zh-CN',
+          'es': 'es-ES',
+          'fr': 'fr-FR',
+          'de': 'de-DE',
+          'ja': 'ja-JP',
+          'ru': 'ru-RU',
+          'ko': 'ko-KR',
+          'ar': 'ar-SA',
+          'pt': 'pt-BR',
+          'it': 'it-IT'
+        };
+        
+        // Handle empty or undefined code
+        if (!normalizedCode) {
+          console.warn('Empty language code provided, using en-US as fallback');
+          return 'en-US';
+        }
+        
+        // If it's already a locale format (xx-XX), use it as is
+        if (normalizedCode.includes('-')) return normalizedCode;
+        
+        // Otherwise, look up the mapping or use en-US as fallback
+        const locale = localeMap[normalizedCode] || 'en-US';
+        console.log(`Converted language code ${normalizedCode} to locale ${locale}`);
+        return locale;
+      };
+      
+      const ttsLocale = getLocaleFromCode(language);
+      console.log(`Using Azure TTS with Shimmer voice for: "${text.substring(0, 30)}..." in ${ttsLocale}`);
       
       // Use Azure TTS API as primary option
       try {
         // Call our TTS API endpoint
+        console.log(`Sending TTS request with language: ${ttsLocale}`);
         const response = await fetch('/api/tts', {
           method: 'POST',
           headers: {
@@ -1458,7 +1634,7 @@ function App() {
           },
           body: JSON.stringify({
             text: text,
-            language: language // Let the API select the appropriate voice based on language
+            language: ttsLocale // Use the properly formatted locale
           }),
         });
         
@@ -1470,23 +1646,40 @@ function App() {
         
         // Get the audio data and play it
         const audioData = await response.arrayBuffer();
+        if (!audioData || audioData.byteLength === 0) {
+          console.error("Received empty audio data from TTS API");
+          throw new Error("Empty audio data received");
+        }
+        
+        console.log(`Received audio data: ${audioData.byteLength} bytes`);
         const blob = new Blob([audioData], { type: 'audio/mp3' });
         const url = URL.createObjectURL(blob);
         
         // Create and play audio
         const audio = new Audio(url);
+        audio.onerror = (e) => {
+          console.error("Audio playback error:", e);
+          URL.revokeObjectURL(url);
+        };
         audio.onended = () => URL.revokeObjectURL(url);
-        await audio.play();
         
-        console.log("Playing Azure TTS audio with Shimmer voice for", language);
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(error => {
+            console.error("Error playing audio:", error);
+            URL.revokeObjectURL(url);
+          });
+        }
+        
+        console.log("Playing Azure TTS audio with Shimmer voice for", ttsLocale);
         return; // Success, no need for fallbacks
       } catch (azureTtsError) {
         console.error("Azure TTS failed:", azureTtsError);
-        // Fall back to Web Speech API if Azure fails
+        // Final fallback to Web Speech API if all else fails
         if ('speechSynthesis' in window) {
-          console.log("Falling back to Web Speech API for TTS");
+          console.log("Using Web Speech API as last resort fallback");
           const utterance = new SpeechSynthesisUtterance(text);
-          utterance.lang = language;
+          utterance.lang = language; // Use original language code for Web Speech API
           window.speechSynthesis.speak(utterance);
         }
       }
@@ -1496,10 +1689,10 @@ function App() {
       // Final fallback to Web Speech API if all else fails
       if ('speechSynthesis' in window) {
         try {
-          const utterance = new SpeechSynthesisUtterance(text);
-          utterance.lang = language;
-          window.speechSynthesis.speak(utterance);
           console.log("Using Web Speech API as last resort fallback");
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.lang = language; // Use original language code for Web Speech API
+          window.speechSynthesis.speak(utterance);
         } catch (webSpeechError) {
           console.error("Web Speech API failed:", webSpeechError);
         }
