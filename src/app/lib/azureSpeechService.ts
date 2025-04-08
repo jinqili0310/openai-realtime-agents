@@ -543,6 +543,10 @@ export function startAzureSpeechRecognition(targetLanguage: string = 'en-US') {
   // 更新当前目标语言
   currentTargetLanguage = targetLanguage;
   
+  // 清除之前累积的转写内容
+  currentTranscript = '';
+  accumulatedTranscript = '';
+  
   try {
     console.log(`开始语音识别，目标语言: ${targetLanguage}`);
     
