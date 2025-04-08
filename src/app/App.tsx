@@ -97,8 +97,8 @@ function App() {
   const [isPTTUserSpeaking, setIsPTTUserSpeaking] = useState<boolean>(false);
   const [isAudioPlaybackEnabled, setIsAudioPlaybackEnabled] =
     useState<boolean>(true);
-  const [mainLang, setMainLang] = useState<string>("");
-  const [lastTargetLang, setLastTargetLang] = useState<string>("");
+  const [mainLang, setMainLang] = useState<string>("zh");
+  const [lastTargetLang, setLastTargetLang] = useState<string>("en");
   const [isFirstMessage, setIsFirstMessage] = useState<boolean>(true);
 
   // 添加指令更新锁定状态
@@ -1258,20 +1258,23 @@ function App() {
         toLanguage: string; 
         isFinal: boolean 
       }) => {
-        console.log(`Azure 翻译: ${result.translatedText}, 从 ${result.fromLanguage} 到 ${result.toLanguage}`);
-        setRealtimeTranslation(result.translatedText);
-        setRealtimeToLang(result.toLanguage);
-        
-        // 对于有效翻译内容，创建或更新翻译消息
-        if (result.translatedText && result.translatedText.trim()) {
-          if (realtimeTranslationMessageIdRef.current) {
-            // 更新已有消息
-            updateTranscriptMessage(realtimeTranslationMessageIdRef.current, result.translatedText, false);
-          } else {
-            // 创建新消息
-            const newId = uuidv4().slice(0, 32);
-            realtimeTranslationMessageIdRef.current = newId;
-            addTranscriptMessage(newId, "assistant", result.translatedText);
+        // 只在最终结果时更新翻译
+        if (result.isFinal) {
+          console.log(`Azure 翻译: ${result.translatedText}, 从 ${result.fromLanguage} 到 ${result.toLanguage}`);
+          setRealtimeTranslation(result.translatedText);
+          setRealtimeToLang(result.toLanguage);
+          
+          // 对于有效翻译内容，创建或更新翻译消息
+          if (result.translatedText && result.translatedText.trim()) {
+            if (realtimeTranslationMessageIdRef.current) {
+              // 更新已有消息
+              updateTranscriptMessage(realtimeTranslationMessageIdRef.current, result.translatedText, false);
+            } else {
+              // 创建新消息
+              const newId = uuidv4().slice(0, 32);
+              realtimeTranslationMessageIdRef.current = newId;
+              addTranscriptMessage(newId, "assistant", result.translatedText);
+            }
           }
         }
       };

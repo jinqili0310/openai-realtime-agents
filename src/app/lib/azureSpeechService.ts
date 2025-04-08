@@ -98,7 +98,7 @@ function speakTranslation(text: string, language: string) {
   }
 }
 
-// 实时翻译文本函数
+// 实时翻译文本函数 - 修改为只在最终结果时翻译
 async function translateText(text: string, isFinal: boolean) {
   if (!text.trim()) return;
   
@@ -107,11 +107,8 @@ async function translateText(text: string, isFinal: boolean) {
     clearTimeout(translationTimeout);
   }
   
-  // 如果是中间结果，添加短延迟避免频繁请求
-  if (!isFinal) {
-    translationTimeout = setTimeout(() => performTranslation(text, isFinal), 500);
-  } else {
-    // 对于最终结果，立即翻译
+  // 只在最终结果时进行翻译
+  if (isFinal) {
     performTranslation(text, isFinal);
   }
 }
@@ -144,24 +141,24 @@ async function performTranslation(text: string, isFinal: boolean) {
       
       // 如果是最终结果，更新累积的翻译内容
       if (isFinal) {
-        accumulatedTranslation += ' ' + currentTranslation;
+        accumulatedTranslation = currentTranslation;
       }
       
-      // 调用翻译回调，包含累积的翻译内容
+      // 调用翻译回调，只包含最终翻译内容
       onTranslationCallback({
-        originalText: accumulatedTranscript.trim(),
-        translatedText: isFinal ? accumulatedTranslation.trim() : (accumulatedTranslation + ' ' + currentTranslation).trim(),
+        originalText: text,
+        translatedText: currentTranslation,
         fromLanguage: data.detectedLanguage || 'zh-CN',
         toLanguage: targetLang,
         isFinal: isFinal
       });
       
-      // 如果是最终结果，只朗读最新的翻译内容
+      // 如果是最终结果，朗读翻译内容
       if (isFinal) {
         speakTranslation(currentTranslation.trim(), currentTargetLanguage);
       }
       
-      console.log(`翻译成功: ${accumulatedTranslation.trim().substring(0, 30)}${accumulatedTranslation.trim().length > 30 ? '...' : ''}`);
+      console.log(`翻译成功: ${currentTranslation.trim().substring(0, 30)}${currentTranslation.trim().length > 30 ? '...' : ''}`);
     } else {
       console.error('翻译请求失败:', await response.text());
     }
