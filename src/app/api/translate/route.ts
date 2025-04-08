@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
-import { ChatCompletionMessageParam } from 'openai/resources/chat';
+// import { ChatCompletionMessageParam } from 'openai/resources/chat';
 
 // 初始化OpenAI客户端
 const openai = new OpenAI({
