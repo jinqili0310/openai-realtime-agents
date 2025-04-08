@@ -46,6 +46,7 @@ export function registerAzureCallbacks(
 
 // 存储转写文本，用于实时翻译
 let currentTranscript = '';
+let accumulatedTranscript = '';
 
 // 初始化Azure服务
 export async function initAzureSpeechService(onTranscription: TranscriptionCallback, onTranslation: TranslationCallback): Promise<boolean> {
@@ -307,33 +308,36 @@ async function initWebSpeechRecognition(): Promise<boolean> {
           // 保存最后的转写结果
           (window as any).speechRecognitionState.lastTranscript = finalTranscript;
           
+          // 更新累积的转写文本
+          accumulatedTranscript += ' ' + finalTranscript;
+          
           // 发送最终结果
           onTranscriptionCallback({
-            text: finalTranscript,
+            text: accumulatedTranscript.trim(),
             language: 'zh-CN',
             isFinal: true
           });
           
           // 保存当前转写文本
-          currentTranscript = finalTranscript;
+          currentTranscript = accumulatedTranscript.trim();
           
           // 处理最终翻译
-          translateText(finalTranscript, true);
+          translateText(accumulatedTranscript.trim(), true);
         } else {
           interimTranscript += transcript;
           
-          // 保存当前转写文本
-          currentTranscript = interimTranscript;
+          // 保存当前转写文本（包含累积文本和临时文本）
+          currentTranscript = accumulatedTranscript + ' ' + interimTranscript;
           
           // 发送中间结果
           onTranscriptionCallback({
-            text: interimTranscript,
+            text: currentTranscript.trim(),
             language: 'zh-CN',
             isFinal: false
           });
           
           // 处理实时翻译
-          translateText(interimTranscript, false);
+          translateText(currentTranscript.trim(), false);
         }
       }
       
