@@ -29,8 +29,8 @@ export async function textToSpeech(options: TTSOptions): Promise<ArrayBuffer> {
   console.log(`TTS Request for: "${text.substring(0, 30)}..." with voice ${voice} in language ${language}`);
 
   // Get Azure TTS credentials from environment variables
-  const subscriptionKey = process.env.NEXT_PUBLIC_AZURE_TTS_KEY;
-  const endpoint = process.env.NEXT_PUBLIC_AZURE_TTS_ENDPOINT;
+  const subscriptionKey = process.env.AZURE_TTS_KEY;
+  const endpoint = process.env.AZURE_TTS_ENDPOINT;
 
   if (!subscriptionKey || !endpoint) {
     console.error('Azure TTS credentials not configured:', { 
