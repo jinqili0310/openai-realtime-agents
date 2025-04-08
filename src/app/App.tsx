@@ -1121,32 +1121,17 @@ function App() {
       
       // 使用更安全的方式：直接更新会话而不是断开重连
       try {
-        // 显示语言更新确认消息
-        const messageId = uuidv4().slice(0, 32);
-        addTranscriptMessage(
-          messageId,
-          "assistant",
-          `语言设置已更新: ML=${mainLang}, TL=${lastTargetLang}。请等待系统更新...`
-        );
-        
-        // 延迟更新会话指令，确保消息显示后再更新
+        // 延迟更新会话指令，确保状态更新
         setTimeout(() => {
           // 更新会话指令而不断开连接
           updateSession();
           
           console.log("语言更新完成，会话已更新");
           
-          // 简单延迟后解除锁定，不再发送额外系统消息
+          // 简单延迟后解除锁定
           setTimeout(() => {
             setIsInstructionUpdating(false);
-            
-            // 更新消息显示
-            addTranscriptMessage(
-              uuidv4().slice(0, 32),
-              "assistant",
-              `System is ready to translate between ${getFriendlyLanguageName(mainLang)} and ${getFriendlyLanguageName(lastTargetLang)}. Speak in either language.`
-            );
-          }, 3000); // 延长等待时间到3秒
+          }, 1000); 
         }, 500);
         
         // 如果处于录音状态，停止录音（避免状态不一致）
@@ -1156,22 +1141,6 @@ function App() {
       } catch (err) {
         console.error("语言更新失败:", err);
         setIsInstructionUpdating(false);
-        
-        // 使用安全类型比较
-        if (sessionStatus !== "CONNECTED" && sessionStatus !== "CONNECTING") {
-          console.log("检测到连接已断开，尝试重新连接...");
-          
-          // 添加连接尝试控制
-          if (connectionAttempts < MAX_CONNECTION_ATTEMPTS) {
-            connectToRealtime();
-          } else {
-            addTranscriptMessage(
-              uuidv4().slice(0, 32),
-              "assistant", 
-              "连接失败次数过多，请刷新页面重试。"
-            );
-          }
-        }
       }
     }
   }, [mainLang, lastTargetLang]);
@@ -1421,44 +1390,47 @@ function App() {
             playTranslationTTS(result.translatedText, ttsLanguage);
           }
           
-          // Detect the language and potentially swap languages
+          // Silently detect and update language settings without notifications
           if (result.fromLanguage) {
-            const detectedLang = result.fromLanguage.split('-')[0].toLowerCase(); // 从 "zh-CN" 提取 "zh"
-            let shouldUpdateAzure = false;
+            const detectedLang = result.fromLanguage.split('-')[0].toLowerCase();
             
             // Only update languages if they're different from current
             if (detectedLang === 'zh' && mainLang !== 'zh') {
-              console.log("检测到中文输入，将中文设为主语言");
+              console.log(`Detected Chinese input, silently updating languages: ML=zh, TL=en`);
               setMainLang('zh');
               setLastTargetLang('en');
-              shouldUpdateAzure = true;
+              
+              // Update Azure service silently
+              const getLocaleFromCode = (code: string): string => {
+                const localeMap: Record<string, string> = {
+                  'en': 'en-US', 'zh': 'zh-CN', 'es': 'es-ES',
+                  'fr': 'fr-FR', 'de': 'de-DE', 'ja': 'ja-JP',
+                  'ru': 'ru-RU', 'ko': 'ko-KR', 'ar': 'ar-SA',
+                  'pt': 'pt-BR', 'it': 'it-IT'
+                };
+                if (code.includes('-')) return code;
+                return localeMap[code.toLowerCase()] || 'en-US';
+              };
+              
+              updateTargetLanguage(getLocaleFromCode('en'));
             } else if (detectedLang === 'en' && mainLang !== 'en') {
-              console.log("检测到英文输入，将英文设为主语言");
+              console.log(`Detected English input, silently updating languages: ML=en, TL=zh`);
               setMainLang('en');
               setLastTargetLang('zh');
-              shouldUpdateAzure = true;
-            }
-            
-            // If we changed languages, update Azure service
-            if (shouldUpdateAzure) {
-              // Call updateTargetLanguage with the proper locale
-              setTimeout(() => {
-                const getLocaleFromCode = (code: string): string => {
-                  const localeMap: Record<string, string> = {
-                    'en': 'en-US', 'zh': 'zh-CN', 'es': 'es-ES',
-                    'fr': 'fr-FR', 'de': 'de-DE', 'ja': 'ja-JP',
-                    'ru': 'ru-RU', 'ko': 'ko-KR', 'ar': 'ar-SA',
-                    'pt': 'pt-BR', 'it': 'it-IT'
-                  };
-                  if (code.includes('-')) return code;
-                  return localeMap[code.toLowerCase()] || 'en-US';
+              
+              // Update Azure service silently
+              const getLocaleFromCode = (code: string): string => {
+                const localeMap: Record<string, string> = {
+                  'en': 'en-US', 'zh': 'zh-CN', 'es': 'es-ES',
+                  'fr': 'fr-FR', 'de': 'de-DE', 'ja': 'ja-JP',
+                  'ru': 'ru-RU', 'ko': 'ko-KR', 'ar': 'ar-SA',
+                  'pt': 'pt-BR', 'it': 'it-IT'
                 };
-                
-                // Use the target language (which is now updated)
-                const newTargetLocale = getLocaleFromCode(detectedLang === 'zh' ? 'en' : 'zh');
-                console.log(`更新 Azure 目标语言为: ${newTargetLocale}`);
-                updateTargetLanguage(newTargetLocale);
-              }, 500); // Add small delay to ensure state is updated
+                if (code.includes('-')) return code;
+                return localeMap[code.toLowerCase()] || 'en-US';
+              };
+              
+              updateTargetLanguage(getLocaleFromCode('zh'));
             }
           }
         }
