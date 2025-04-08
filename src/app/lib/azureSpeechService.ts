@@ -1,5 +1,3 @@
-import { RefObject } from 'react';
-
 // Azure Speech SDK types (these will be imported from the SDK when installed)
 interface AzureSpeechRecognitionResult {
   text: string;
@@ -28,7 +26,7 @@ let isListening = false;
 
 // 定义一个备用区域列表，如果主要区域连接失败可以尝试这些
 const fallbackRegions = ['eastus', 'eastus2', 'westus2', 'southeastasia', 'westeurope'];
-let currentRegionIndex = 0;
+const currentRegionIndex = 0;
 
 // 存储回调函数的引用
 let onTranscriptionCallback: TranscriptionCallback = (result) => console.log('默认转写回调:', result);
@@ -45,8 +43,10 @@ export function registerAzureCallbacks(
 }
 
 // 存储转写文本，用于实时翻译
-let currentTranscript = '';
-let accumulatedTranscript = '';
+let currentTranscript = ''; // 当前正在识别的文本
+let accumulatedTranscript = ''; // 累积的所有转写内容
+let currentTranslation = ''; // 当前正在翻译的文本
+let accumulatedTranslation = ''; // 累积的所有翻译内容
 
 // 用于实时翻译的全局变量
 let currentTargetLanguage = 'en-US';
@@ -78,6 +78,20 @@ function speakTranslation(text: string, language: string) {
     utterance.lang = language;
     utterance.rate = 1.0; // 语速
     utterance.pitch = 1.0; // 音调
+    
+    // 在开始朗读前暂时停止语音识别
+    if (isListening) {
+      stopAzureSpeechRecognition();
+    }
+    
+    // 设置朗读结束事件
+    utterance.onend = () => {
+      console.log('朗读结束，重新启动语音识别');
+      // 朗读结束后重新启动语音识别
+      if (!isListening) {
+        startAzureSpeechRecognition(currentTargetLanguage);
+      }
+    };
     
     // 开始朗读
     speechSynthesis.speak(utterance);
@@ -125,10 +139,18 @@ async function performTranslation(text: string, isFinal: boolean) {
     if (response.ok) {
       const data = await response.json();
       
-      // 调用翻译回调
+      // 更新当前翻译内容
+      currentTranslation = data.translatedText;
+      
+      // 如果是最终结果，更新累积的翻译内容
+      if (isFinal) {
+        accumulatedTranslation += ' ' + currentTranslation;
+      }
+      
+      // 调用翻译回调，包含累积的翻译内容
       onTranslationCallback({
-        originalText: text,
-        translatedText: data.translatedText,
+        originalText: accumulatedTranscript.trim(),
+        translatedText: isFinal ? accumulatedTranslation.trim() : (accumulatedTranslation + ' ' + currentTranslation).trim(),
         fromLanguage: data.detectedLanguage || 'zh-CN',
         toLanguage: targetLang,
         isFinal: isFinal
@@ -136,10 +158,10 @@ async function performTranslation(text: string, isFinal: boolean) {
       
       // 如果是最终结果，朗读翻译内容
       if (isFinal) {
-        speakTranslation(data.translatedText, currentTargetLanguage);
+        speakTranslation(accumulatedTranslation.trim(), currentTargetLanguage);
       }
       
-      console.log(`翻译成功: ${data.translatedText.substring(0, 30)}${data.translatedText.length > 30 ? '...' : ''}`);
+      console.log(`翻译成功: ${accumulatedTranslation.trim().substring(0, 30)}${accumulatedTranslation.trim().length > 30 ? '...' : ''}`);
     } else {
       console.error('翻译请求失败:', await response.text());
     }
@@ -170,7 +192,7 @@ export async function initAzureSpeechService(onTranscription: TranscriptionCallb
       // 尝试使用Azure服务
       try {
         // 动态导入Azure Speech SDK
-        const { SpeechConfig, AudioConfig, SpeechRecognizer, TranslationRecognizer, ResultReason } = await import('microsoft-cognitiveservices-speech-sdk');
+        const { SpeechConfig, AudioConfig, SpeechRecognizer, ResultReason } = await import('microsoft-cognitiveservices-speech-sdk');
         
         // 获取API密钥
         const subscriptionKey = process.env.NEXT_PUBLIC_AZURE_TTS_KEY;
@@ -348,32 +370,34 @@ async function initWebSpeechRecognition(): Promise<boolean> {
           // 更新累积的转写文本
           accumulatedTranscript += ' ' + finalTranscript;
           
-          // 发送最终结果
+          // 发送最终结果，包含累积的转写内容
           onTranscriptionCallback({
             text: accumulatedTranscript.trim(),
             language: 'zh-CN',
             isFinal: true
           });
           
-          // 保存当前转写文本
-          currentTranscript = accumulatedTranscript.trim();
+          console.log('累积转写文本:', accumulatedTranscript.trim());
           
-          // 处理最终翻译
-          translateText(accumulatedTranscript.trim(), true);
+          // 保存当前转写文本
+          currentTranscript = finalTranscript;
+          
+          // 处理最终翻译，只使用最新的内容
+          translateText(currentTranscript.trim(), true);
         } else {
           interimTranscript += transcript;
           
-          // 保存当前转写文本（包含累积文本和临时文本）
-          currentTranscript = accumulatedTranscript + ' ' + interimTranscript;
+          // 保存当前转写文本（只包含临时文本）
+          currentTranscript = interimTranscript;
           
-          // 发送中间结果
+          // 发送中间结果，包含累积的转写内容和当前临时文本
           onTranscriptionCallback({
-            text: currentTranscript.trim(),
+            text: (accumulatedTranscript + ' ' + currentTranscript).trim(),
             language: 'zh-CN',
             isFinal: false
           });
           
-          // 处理实时翻译
+          // 处理实时翻译，只使用最新的内容
           translateText(currentTranscript.trim(), false);
         }
       }
@@ -580,9 +604,9 @@ export function startAzureSpeechRecognition(targetLanguage: string = 'en-US') {
   // 更新当前目标语言
   currentTargetLanguage = targetLanguage;
   
-  // 清除之前累积的转写内容
+  // 只清除当前内容，保留累积内容
   currentTranscript = '';
-  accumulatedTranscript = '';
+  currentTranslation = '';
   
   try {
     console.log(`开始语音识别，目标语言: ${targetLanguage}`);
