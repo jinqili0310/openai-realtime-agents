@@ -156,9 +156,9 @@ async function performTranslation(text: string, isFinal: boolean) {
         isFinal: isFinal
       });
       
-      // 如果是最终结果，朗读翻译内容
+      // 如果是最终结果，只朗读最新的翻译内容
       if (isFinal) {
-        speakTranslation(accumulatedTranslation.trim(), currentTargetLanguage);
+        speakTranslation(currentTranslation.trim(), currentTargetLanguage);
       }
       
       console.log(`翻译成功: ${accumulatedTranslation.trim().substring(0, 30)}${accumulatedTranslation.trim().length > 30 ? '...' : ''}`);
