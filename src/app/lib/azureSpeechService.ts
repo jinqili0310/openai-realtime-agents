@@ -595,7 +595,7 @@ async function initWebSpeechRecognition(): Promise<boolean> {
 }
 
 // 开始语音识别和翻译 - 修改为支持Web Speech API
-export function startAzureSpeechRecognition(targetLanguage: string = 'en-US') {
+export function startAzureSpeechRecognition(targetLanguage: string = 'en-US', isNewRecording: boolean = false) {
   if (!isInitialized) {
     console.error('语音服务未初始化，无法启动识别');
     return;
@@ -604,9 +604,19 @@ export function startAzureSpeechRecognition(targetLanguage: string = 'en-US') {
   // 更新当前目标语言
   currentTargetLanguage = targetLanguage;
   
-  // 只清除当前内容，保留累积内容
-  currentTranscript = '';
-  currentTranslation = '';
+  // 如果是新的录音，清空所有累积内容
+  if (isNewRecording) {
+    console.log('开始新的录音，清空累积内容');
+    currentTranscript = '';
+    accumulatedTranscript = '';
+    currentTranslation = '';
+    accumulatedTranslation = '';
+  } else {
+    // 如果不是新的录音，只清空当前内容
+    console.log('继续当前录音，保留累积内容');
+    currentTranscript = '';
+    currentTranslation = '';
+  }
   
   try {
     console.log(`开始语音识别，目标语言: ${targetLanguage}`);

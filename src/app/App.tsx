@@ -785,7 +785,7 @@ function App() {
         
         // 在确保创建了新消息后再启动Azure
         setTimeout(() => {
-          startAzureSpeechRecognition(targetLangCode);
+          startAzureSpeechRecognition(targetLangCode, true);
           setAzureListening(true);
         }, 100);
       } catch (error) {
